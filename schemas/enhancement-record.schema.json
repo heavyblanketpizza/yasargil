@@ -1,0 +1,2783 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:yasargil:enhancement-record:2.0.0",
+  "title": "Yasargil reviewable surgical dataset enrichment record v2.0.0",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "record_id",
+    "revision",
+    "status",
+    "intended_use",
+    "source",
+    "assets",
+    "original_annotations",
+    "frame_selection",
+    "transformations",
+    "generation_runs",
+    "claims",
+    "source_conflicts",
+    "reviews",
+    "enrichment_quality",
+    "case_outcomes",
+    "patient_risk_adjustment",
+    "training_view",
+    "partition",
+    "training_value"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "2.0.0"
+    },
+    "record_id": {
+      "$ref": "#/$defs/id"
+    },
+    "revision": {
+      "$ref": "#/$defs/revision"
+    },
+    "status": {
+      "enum": [
+        "draft",
+        "in_review",
+        "reviewed",
+        "rejected"
+      ]
+    },
+    "intended_use": {
+      "enum": [
+        "causal_intraoperative_assistance",
+        "retrospective_surgical_review"
+      ]
+    },
+    "source": {
+      "$ref": "#/$defs/source"
+    },
+    "assets": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/asset"
+      },
+      "minItems": 1
+    },
+    "original_annotations": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/annotation"
+      },
+      "minItems": 0
+    },
+    "frame_selection": {
+      "$ref": "#/$defs/frame_selection"
+    },
+    "transformations": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/transformation"
+      },
+      "minItems": 0
+    },
+    "generation_runs": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/generation_run"
+      },
+      "minItems": 0
+    },
+    "claims": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/claim"
+      },
+      "minItems": 0
+    },
+    "source_conflicts": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/conflict"
+      },
+      "minItems": 0
+    },
+    "reviews": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/review"
+      },
+      "minItems": 0
+    },
+    "enrichment_quality": {
+      "$ref": "#/$defs/enrichment_quality"
+    },
+    "case_outcomes": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/case_outcome"
+      },
+      "minItems": 0
+    },
+    "patient_risk_adjustment": {
+      "$ref": "#/$defs/patient_risk_adjustment"
+    },
+    "training_view": {
+      "$ref": "#/$defs/training_view"
+    },
+    "partition": {
+      "$ref": "#/$defs/partition"
+    },
+    "training_value": {
+      "$ref": "#/$defs/training_value"
+    }
+  },
+  "description": "One JSONL record is an auditable enhancement archive: original bytes and annotations, derivations, proposed claims, actual reviews, conversation alignment and separate case-level outcomes. JSON Schema checks structure, not factual correctness, reviewer authenticity, temporal exposure or training benefit. Semantic validation and the review protocol must establish those properties before a messages-only Unsloth export.",
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "enum": [
+              "draft",
+              "in_review",
+              "rejected"
+            ]
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "then": {
+        "properties": {
+          "training_view": {
+            "properties": {
+              "eligibility": {
+                "enum": [
+                  "pending_review",
+                  "excluded"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "training_view": {
+            "properties": {
+              "eligibility": {
+                "const": "eligible"
+              }
+            },
+            "required": [
+              "eligibility"
+            ]
+          }
+        },
+        "required": [
+          "training_view"
+        ]
+      },
+      "then": {
+        "properties": {
+          "status": {
+            "const": "reviewed"
+          },
+          "partition": {
+            "properties": {
+              "name": {
+                "enum": [
+                  "train",
+                  "validation",
+                  "test"
+                ]
+              }
+            }
+          },
+          "claims": {
+            "minItems": 1
+          },
+          "reviews": {
+            "minItems": 1
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "source": {
+            "properties": {
+              "dataset_name": {
+                "const": "SOSpine"
+              }
+            },
+            "required": [
+              "dataset_name"
+            ]
+          }
+        },
+        "required": [
+          "source"
+        ]
+      },
+      "then": {
+        "properties": {
+          "source": {
+            "properties": {
+              "setting": {
+                "const": "cadaveric_simulation"
+              },
+              "patient_id": {
+                "type": "null"
+              }
+            }
+          },
+          "case_outcomes": {
+            "items": {
+              "properties": {
+                "scope": {
+                  "const": "simulated_technical_outcome"
+                }
+              }
+            }
+          },
+          "patient_risk_adjustment": {
+            "properties": {
+              "status": {
+                "const": "unavailable"
+              },
+              "reason": {
+                "const": "cadaveric_simulation_without_patient_baseline_or_recovery"
+              }
+            },
+            "required": [
+              "status",
+              "reason"
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+    },
+    "revision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "revision_id",
+        "parent_revision_id",
+        "created_at"
+      ],
+      "properties": {
+        "revision_id": {
+          "$ref": "#/$defs/id"
+        },
+        "parent_revision_id": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "description": "Immutable revision identity. Parent revision links the previous record state; timestamps describe archive revision creation."
+    },
+    "license_evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "source_asset_ids",
+        "notes"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "consistent",
+            "conflicting_notices",
+            "unresolved"
+          ]
+        },
+        "source_asset_ids": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/id"
+          },
+          "minItems": 0,
+          "uniqueItems": true
+        },
+        "notes": {
+          "type": "string"
+        }
+      }
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "dataset_name",
+        "dataset_version",
+        "dataset_uri",
+        "setting",
+        "procedure",
+        "case_id",
+        "surgeon_id",
+        "patient_id",
+        "institution_id",
+        "source_manifest_asset_id",
+        "license_evidence"
+      ],
+      "properties": {
+        "dataset_name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "dataset_version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "dataset_uri": {
+          "type": "string",
+          "format": "uri"
+        },
+        "setting": {
+          "enum": [
+            "cadaveric_simulation",
+            "physical_simulation",
+            "clinical_recording"
+          ]
+        },
+        "procedure": {
+          "type": "string",
+          "minLength": 1
+        },
+        "case_id": {
+          "$ref": "#/$defs/id"
+        },
+        "surgeon_id": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "patient_id": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "institution_id": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "source_manifest_asset_id": {
+          "$ref": "#/$defs/id"
+        },
+        "license_evidence": {
+          "$ref": "#/$defs/license_evidence"
+        }
+      }
+    },
+    "asset": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "asset_id",
+        "role",
+        "origin",
+        "location",
+        "sha256",
+        "media_type",
+        "derived_from_asset_ids",
+        "transformation_id"
+      ],
+      "properties": {
+        "asset_id": {
+          "$ref": "#/$defs/id"
+        },
+        "role": {
+          "enum": [
+            "original_video",
+            "released_frame",
+            "derived_image",
+            "annotation_table",
+            "case_metadata",
+            "source_manifest",
+            "license_notice",
+            "reference_document",
+            "teacher_request",
+            "teacher_response",
+            "review_artifact",
+            "evaluation_report",
+            "split_manifest"
+          ]
+        },
+        "origin": {
+          "enum": [
+            "original_dataset",
+            "deterministically_derived",
+            "model_generated",
+            "human_authored"
+          ]
+        },
+        "location": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Resolvable asset location. Source-root/path policy and byte verification are enforced by the storage adapter."
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "media_type": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9!#$&^_.+-]+/[A-Za-z0-9!#$&^_.+-]+$"
+        },
+        "derived_from_asset_ids": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/id"
+          },
+          "minItems": 0,
+          "uniqueItems": true
+        },
+        "transformation_id": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "width": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "height": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "dependentRequired": {
+        "width": [
+          "height"
+        ],
+        "height": [
+          "width"
+        ]
+      },
+      "description": "Byte-addressed original or derived asset. Original dataset bytes remain immutable; derived assets retain their ancestry."
+    },
+    "locator": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "asset_id",
+        "locator_type",
+        "locator"
+      ],
+      "properties": {
+        "asset_id": {
+          "$ref": "#/$defs/id"
+        },
+        "locator_type": {
+          "enum": [
+            "csv_row_1based_including_header",
+            "json_pointer",
+            "document_page",
+            "text_span",
+            "whole_asset"
+          ]
+        },
+        "locator": {
+          "type": "string",
+          "description": "Locator syntax is determined by locator_type. CSV rows include the header as row 1; empty string is valid for a JSON document root or whole asset."
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "locator_type": {
+                "const": "csv_row_1based_including_header"
+              }
+            },
+            "required": [
+              "locator_type"
+            ]
+          },
+          "then": {
+            "properties": {
+              "locator": {
+                "type": "string",
+                "pattern": "^[1-9][0-9]*$"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "locator_type": {
+                "const": "document_page"
+              }
+            },
+            "required": [
+              "locator_type"
+            ]
+          },
+          "then": {
+            "properties": {
+              "locator": {
+                "type": "string",
+                "pattern": "^[1-9][0-9]*$"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "locator_type": {
+                "const": "json_pointer"
+              }
+            },
+            "required": [
+              "locator_type"
+            ]
+          },
+          "then": {
+            "properties": {
+              "locator": {
+                "type": "string",
+                "pattern": "^(?:/(?:[^~/]|~[01])*)*$"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "annotation_usage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "considered",
+        "used_for_generation",
+        "used_as_target_evidence",
+        "exclusion_reason"
+      ],
+      "properties": {
+        "considered": {
+          "type": "boolean"
+        },
+        "used_for_generation": {
+          "type": "boolean"
+        },
+        "used_as_target_evidence": {
+          "type": "boolean"
+        },
+        "exclusion_reason": {
+          "oneOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "considered": {
+                "const": false
+              }
+            },
+            "required": [
+              "considered"
+            ]
+          },
+          "then": {
+            "properties": {
+              "used_for_generation": {
+                "const": false
+              },
+              "used_as_target_evidence": {
+                "const": false
+              }
+            }
+          }
+        }
+      ]
+    },
+    "annotation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "annotation_id",
+        "source_locator",
+        "original_kind",
+        "original_origin",
+        "raw_value",
+        "frame_ids",
+        "usage"
+      ],
+      "properties": {
+        "annotation_id": {
+          "$ref": "#/$defs/id"
+        },
+        "source_locator": {
+          "$ref": "#/$defs/locator"
+        },
+        "original_kind": {
+          "enum": [
+            "keypoint",
+            "bbox",
+            "segmentation",
+            "instrument",
+            "anatomy",
+            "action",
+            "workflow",
+            "case_metadata",
+            "baseline_patient_variable",
+            "outcome",
+            "other"
+          ]
+        },
+        "original_origin": {
+          "enum": [
+            "manual",
+            "computed",
+            "model_prediction",
+            "measured_metadata",
+            "unknown"
+          ]
+        },
+        "raw_value": {
+          "description": "Exact source value, preserved without normalization or interpretation; any valid JSON value is permitted."
+        },
+        "frame_ids": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/id"
+          },
+          "minItems": 0,
+          "uniqueItems": true
+        },
+        "usage": {
+          "$ref": "#/$defs/annotation_usage"
+        }
+      },
+      "description": "Exact source annotation and its declared provenance. Original computed/model labels do not become manual ground truth by import or review."
+    },
+    "frame": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "frame_id",
+        "asset_id",
+        "frame_index",
+        "timestamp_ms",
+        "timestamp_basis",
+        "role",
+        "selection_reason",
+        "context_frame_ids"
+      ],
+      "properties": {
+        "frame_id": {
+          "$ref": "#/$defs/id"
+        },
+        "asset_id": {
+          "$ref": "#/$defs/id"
+        },
+        "frame_index": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "timestamp_ms": {
+          "oneOf": [
+            {
+              "type": "number",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "timestamp_basis": {
+          "enum": [
+            "unavailable",
+            "estimated_from_sampling",
+            "verified_original_pts"
+          ]
+        },
+        "role": {
+          "enum": [
+            "keyframe",
+            "preceding_context",
+            "following_context"
+          ]
+        },
+        "selection_reason": {
+          "type": "string",
+          "minLength": 1
+        },
+        "context_frame_ids": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/id"
+          },
+          "minItems": 0,
+          "uniqueItems": true
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "timestamp_basis": {
+                "const": "unavailable"
+              }
+            },
+            "required": [
+              "timestamp_basis"
+            ]
+          },
+          "then": {
+            "properties": {
+              "timestamp_ms": {
+                "type": "null"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "timestamp_ms": {
+                "type": "number",
+                "minimum": 0
+              }
+            }
+          }
+        }
+      ],
+      "description": "Frame order and timing are distinct. Unavailable timestamps are null; estimated sampling times must not be presented as original presentation timestamps."
+    },
+    "frame_selection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sequence_id",
+        "video_asset_id",
+        "released_fps",
+        "method",
+        "selector_version",
+        "selector_exposure",
+        "parameters",
+        "frames",
+        "known_sampling_limitations"
+      ],
+      "properties": {
+        "sequence_id": {
+          "$ref": "#/$defs/id"
+        },
+        "video_asset_id": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "released_fps": {
+          "oneOf": [
+            {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "method": {
+          "enum": [
+            "all_available",
+            "uniform",
+            "event",
+            "diversity",
+            "uncertainty",
+            "expert",
+            "hybrid",
+            "explicit_indices"
+          ]
+        },
+        "selector_version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "selector_exposure": {
+          "enum": [
+            "causal_prefix_only",
+            "offline_entire_sequence"
+          ]
+        },
+        "parameters": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "Method-specific, serializable parameters. Preserve exact values; validation of method semantics is separate."
+        },
+        "frames": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/frame"
+          },
+          "minItems": 1
+        },
+        "known_sampling_limitations": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 0
+        }
+      },
+      "description": "Selection provenance is independent of generation provenance. Offline selection does not establish an online selector; selection scores are not claim-quality scores."
+    },
+    "transformation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "transformation_id",
+        "operation",
+        "implementation",
+        "implementation_version",
+        "input_asset_ids",
+        "input_annotation_ids",
+        "output_asset_ids",
+        "output_claim_ids",
+        "parameters",
+        "description"
+      ],
+      "properties": {
+        "transformation_id": {
+          "$ref": "#/$defs/id"
+        },
+        "operation": {
+          "enum": [
+            "frame_extraction",
+            "frame_selection",
+            "resize",
+            "crop",
+            "label_normalization",
+            "coordinate_conversion",
+            "grouping",
+            "deterministic_text",
+            "measurement",
+            "other"
+          ]
+        },
+        "implementation": {
+          "type": "string",
+          "minLength": 1
+        },
+        "implementation_version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "input_asset_ids": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/id"
+          },
+          "minItems": 0,
+          "uniqueItems": true
+        },
+        "input_annotation_ids": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/id"
+          },
+          "minItems": 0,
+          "uniqueItems": true
+        },
+        "output_asset_ids": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/id"
+          },
+          "minItems": 0,
+          "uniqueItems": true
+        },
+        "output_claim_ids": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/id"
+          },
+          "minItems": 0,
+          "uniqueItems": true
+        },
+        "parameters": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "Method-specific, serializable parameters. Preserve exact values; validation of method semantics is separate."
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "description": "A reproducible derivation, with original inputs preserved. Model-generated additions instead identify their generation run."
+    },
+    "generation_run": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "run_id",
+        "model_name",
+        "model_digest",
+        "quantization",
+        "runtime",
+        "runtime_version",
+        "request_asset_id",
+        "response_asset_id",
+        "prompt_version",
+        "input_mode",
+        "input_frame_ids",
+        "input_annotation_ids",
+        "input_reference_asset_ids",
+        "previous_message_indices",
+        "outcome_ids_seen",
+        "maximum_frame_index_seen",
+        "generation_parameters"
+      ],
+      "properties": {
+        "run_id": {
+          "$ref": "#/$defs/id"
+        },
+        "model_name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "model_digest": {
+          "type": "string",
+          "minLength": 1
+        },
+        "quantization": {
+          "type": "string",
+          "minLength": 1
+        },
+        "runtime": {
+          "type": "string",
+          "minLength": 1
+        },
+        "runtime_version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "request_asset_id": {
+          "$ref": "#/$defs/id"
+        },
+        "response_asset_id": {
+          "$ref": "#/$defs/id"
+        },
+        "prompt_version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "input_mode": {
+          "enum": [
+            "causal_prefix",
+            "retrospective"
+          ]
+        },
+        "input_frame_ids": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/id"
+          },
+          "minItems": 0,
+          "uniqueItems": true
+        },
+        "input_annotation_ids": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/id"
+          },
+          "minItems": 0,
+          "uniqueItems": true
+        },
+        "input_reference_asset_ids": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/id"
+          },
+          "minItems": 0,
+          "uniqueItems": true
+        },
+        "previous_message_indices": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "minItems": 0,
+          "uniqueItems": true
+        },
+        "outcome_ids_seen": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/id"
+          },
+          "minItems": 0,
+          "uniqueItems": true
+        },
+        "maximum_frame_index_seen": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "generation_parameters": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "Method-specific, serializable parameters. Preserve exact values; validation of method semantics is separate."
+        }
+      },
+      "description": "An actual generation receipt, not merely intended inputs. Request/response assets preserve exact request and output bytes, including supplied text, original annotations, reference excerpts and conversation context. This metadata is not itself model-visible."
+    },
+    "region": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "frame_id",
+        "type",
+        "coordinate_system",
+        "coordinates",
+        "derivation"
+      ],
+      "properties": {
+        "frame_id": {
+          "$ref": "#/$defs/id"
+        },
+        "type": {
+          "enum": [
+            "point_xy",
+            "bbox_xyxy"
+          ]
+        },
+        "coordinate_system": {
+          "const": "normalized_original_image_edges_0_1"
+        },
+        "coordinates": {
+          "type": "array",
+          "items": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "minItems": 2,
+          "maxItems": 4
+        },
+        "derivation": {
+          "enum": [
+            "converted_source_geometry",
+            "model_proposed_geometry",
+            "expert_annotated_geometry"
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "point_xy"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "properties": {
+              "coordinates": {
+                "minItems": 2,
+                "maxItems": 2
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "bbox_xyxy"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "properties": {
+              "coordinates": {
+                "minItems": 4,
+                "maxItems": 4
+              }
+            }
+          }
+        }
+      ],
+      "description": "Top-left origin, x rightward and y downward; coordinates refer to original image edges. Bounding-box order is x1,y1,x2,y2 and semantic validation requires positive area. Cropped/resized display coordinates must be mapped back through documented transformations."
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "frame_ids",
+        "original_annotation_ids",
+        "supporting_claim_ids",
+        "reference_asset_ids",
+        "regions"
+      ],
+      "properties": {
+        "frame_ids": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/id"
+          },
+          "minItems": 0,
+          "uniqueItems": true
+        },
+        "original_annotation_ids": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/id"
+          },
+          "minItems": 0,
+          "uniqueItems": true
+        },
+        "supporting_claim_ids": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/id"
+          },
+          "minItems": 0,
+          "uniqueItems": true
+        },
+        "reference_asset_ids": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/id"
+          },
+          "minItems": 0,
+          "uniqueItems": true
+        },
+        "regions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/region"
+          },
+          "minItems": 0
+        }
+      },
+      "description": "Empty evidence is allowed for pending proposals so unsupported additions remain reviewable. Training eligibility requires semantic evidence/review checks; a reference alone does not establish support."
+    },
+    "output_location": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "message_index",
+        "content_block_index",
+        "start_character",
+        "end_character"
+      ],
+      "properties": {
+        "message_index": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "content_block_index": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "start_character": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "end_character": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "description": "Zero-based [start_character,end_character) Unicode codepoint offsets into the exact text of one messages content block. Semantic validation verifies the range and correspondence to claim text."
+    },
+    "claim": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "claim_id",
+        "text",
+        "type",
+        "origin",
+        "contribution",
+        "generation_run_id",
+        "transformation_id",
+        "supersedes_claim_id",
+        "evidence",
+        "output_locations",
+        "review_ids",
+        "disposition"
+      ],
+      "properties": {
+        "claim_id": {
+          "$ref": "#/$defs/id"
+        },
+        "text": {
+          "type": "string",
+          "minLength": 1
+        },
+        "type": {
+          "enum": [
+            "visible_observation",
+            "localization",
+            "temporal_relation",
+            "action_description",
+            "clinical_interpretation",
+            "suggested_check",
+            "outcome_prediction",
+            "uncertainty_statement"
+          ]
+        },
+        "origin": {
+          "enum": [
+            "source_reexpression",
+            "deterministic_derivation",
+            "model_generated",
+            "expert_authored"
+          ]
+        },
+        "contribution": {
+          "enum": [
+            "restates_existing_information",
+            "combines_existing_information",
+            "adds_proposed_observation",
+            "adds_proposed_interpretation",
+            "proposes_source_correction"
+          ]
+        },
+        "generation_run_id": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "transformation_id": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "supersedes_claim_id": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "evidence": {
+          "$ref": "#/$defs/evidence"
+        },
+        "output_locations": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/output_location"
+          },
+          "minItems": 0
+        },
+        "review_ids": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/id"
+          },
+          "minItems": 0,
+          "uniqueItems": true
+        },
+        "disposition": {
+          "enum": [
+            "pending",
+            "retained",
+            "rejected",
+            "superseded"
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "origin": {
+                "const": "model_generated"
+              }
+            },
+            "required": [
+              "origin"
+            ]
+          },
+          "then": {
+            "properties": {
+              "generation_run_id": {
+                "$ref": "#/$defs/id"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "origin": {
+                "const": "deterministic_derivation"
+              }
+            },
+            "required": [
+              "origin"
+            ]
+          },
+          "then": {
+            "properties": {
+              "transformation_id": {
+                "$ref": "#/$defs/id"
+              }
+            }
+          }
+        }
+      ],
+      "description": "The smallest reviewable assertion. Origin and contribution remain explicit after acceptance; reexpressing an existing annotation is not a new verified observation. Rejected and superseded claims remain auditable."
+    },
+    "conflict": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "conflict_id",
+        "annotation_ids",
+        "claim_ids",
+        "description",
+        "status",
+        "resolution_review_id"
+      ],
+      "properties": {
+        "conflict_id": {
+          "$ref": "#/$defs/id"
+        },
+        "annotation_ids": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/id"
+          },
+          "minItems": 0,
+          "uniqueItems": true
+        },
+        "claim_ids": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/id"
+          },
+          "minItems": 0,
+          "uniqueItems": true
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1
+        },
+        "status": {
+          "enum": [
+            "unresolved",
+            "resolved"
+          ]
+        },
+        "resolution_review_id": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "anyOf": [
+        {
+          "properties": {
+            "annotation_ids": {
+              "minItems": 1
+            }
+          }
+        },
+        {
+          "properties": {
+            "claim_ids": {
+              "minItems": 1
+            }
+          }
+        }
+      ],
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "resolved"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "properties": {
+              "resolution_review_id": {
+                "$ref": "#/$defs/id"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "resolution_review_id": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      ],
+      "description": "Conflicting source values and claims remain available. Resolution points to actual adjudication; it does not erase the original discrepancy."
+    },
+    "review": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "review_id",
+        "reviewer_id",
+        "reviewer_role",
+        "reviewed_at",
+        "rubric_id",
+        "rubric_version",
+        "target_claim_ids",
+        "target_message_indices",
+        "outcome_hidden_during_review",
+        "generator_identity_hidden",
+        "verdict",
+        "evidence_adequacy",
+        "temporal_correctness",
+        "clinical_appropriateness",
+        "question_answerability",
+        "adds_useful_supervision",
+        "error_severity",
+        "correction_time_seconds",
+        "replacement_claim_ids",
+        "notes"
+      ],
+      "properties": {
+        "review_id": {
+          "$ref": "#/$defs/id"
+        },
+        "reviewer_id": {
+          "$ref": "#/$defs/id"
+        },
+        "reviewer_role": {
+          "enum": [
+            "surgeon",
+            "clinical_domain_expert",
+            "trained_annotator",
+            "data_quality_reviewer"
+          ]
+        },
+        "reviewed_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "rubric_id": {
+          "$ref": "#/$defs/id"
+        },
+        "rubric_version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "target_claim_ids": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/id"
+          },
+          "minItems": 0,
+          "uniqueItems": true
+        },
+        "target_message_indices": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "minItems": 0,
+          "uniqueItems": true
+        },
+        "outcome_hidden_during_review": {
+          "type": "boolean"
+        },
+        "generator_identity_hidden": {
+          "type": "boolean"
+        },
+        "verdict": {
+          "enum": [
+            "supported",
+            "needs_correction",
+            "unsupported",
+            "indeterminate",
+            "source_conflict"
+          ]
+        },
+        "evidence_adequacy": {
+          "enum": [
+            "adequate",
+            "partial",
+            "inadequate",
+            "not_applicable"
+          ]
+        },
+        "temporal_correctness": {
+          "enum": [
+            "correct",
+            "incorrect",
+            "indeterminate",
+            "not_applicable"
+          ]
+        },
+        "clinical_appropriateness": {
+          "enum": [
+            "appropriate",
+            "inappropriate",
+            "indeterminate",
+            "not_applicable"
+          ]
+        },
+        "question_answerability": {
+          "enum": [
+            "from_supplied_input",
+            "requires_missing_information",
+            "not_applicable"
+          ]
+        },
+        "adds_useful_supervision": {
+          "enum": [
+            "yes",
+            "no",
+            "uncertain"
+          ]
+        },
+        "error_severity": {
+          "enum": [
+            "none",
+            "minor",
+            "major",
+            "critical",
+            "not_assessed"
+          ]
+        },
+        "correction_time_seconds": {
+          "oneOf": [
+            {
+              "type": "number",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "replacement_claim_ids": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/id"
+          },
+          "minItems": 0,
+          "uniqueItems": true
+        },
+        "notes": {
+          "type": "string"
+        }
+      },
+      "anyOf": [
+        {
+          "properties": {
+            "target_claim_ids": {
+              "minItems": 1
+            }
+          }
+        },
+        {
+          "properties": {
+            "target_message_indices": {
+              "minItems": 1
+            }
+          }
+        }
+      ],
+      "description": "A completed human review event. Schema validity neither creates a review nor authenticates the reviewer. Applicable criteria and reviewer qualifications are enforced by the review protocol/training gate."
+    },
+    "measurement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "metric",
+        "value",
+        "unit",
+        "denominator",
+        "method_reference",
+        "supporting_review_ids"
+      ],
+      "properties": {
+        "metric": {
+          "enum": [
+            "supported_claim_fraction",
+            "unsupported_claim_count",
+            "temporal_error_count",
+            "critical_error_count",
+            "source_reexpression_accuracy",
+            "verified_additional_observation_count",
+            "useful_training_question_count",
+            "question_answerability_fraction",
+            "review_and_correction_time"
+          ]
+        },
+        "value": {
+          "type": "number",
+          "minimum": 0
+        },
+        "unit": {
+          "enum": [
+            "fraction",
+            "count",
+            "seconds"
+          ]
+        },
+        "denominator": {
+          "oneOf": [
+            {
+              "type": "integer",
+              "minimum": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "method_reference": {
+          "type": "string",
+          "minLength": 1
+        },
+        "supporting_review_ids": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/id"
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "metric": {
+                "enum": [
+                  "supported_claim_fraction",
+                  "source_reexpression_accuracy",
+                  "question_answerability_fraction"
+                ]
+              }
+            },
+            "required": [
+              "metric"
+            ]
+          },
+          "then": {
+            "properties": {
+              "unit": {
+                "const": "fraction"
+              },
+              "value": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              },
+              "denominator": {
+                "type": "integer",
+                "minimum": 1
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "metric": {
+                "enum": [
+                  "unsupported_claim_count",
+                  "temporal_error_count",
+                  "critical_error_count",
+                  "verified_additional_observation_count",
+                  "useful_training_question_count"
+                ]
+              }
+            },
+            "required": [
+              "metric"
+            ]
+          },
+          "then": {
+            "properties": {
+              "unit": {
+                "const": "count"
+              },
+              "value": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "denominator": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "metric": {
+                "const": "review_and_correction_time"
+              }
+            },
+            "required": [
+              "metric"
+            ]
+          },
+          "then": {
+            "properties": {
+              "unit": {
+                "const": "seconds"
+              },
+              "denominator": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      ],
+      "description": "A measured, protocol-defined statistic supported by actual reviews. Fractions require explicit denominators; counts and durations do not manufacture a denominator. These are annotation/review measurements, not downstream model benefit or clinical efficacy."
+    },
+    "enrichment_quality": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "protocol_id",
+        "review_ids",
+        "measurements"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "not_assessed",
+            "partially_assessed",
+            "assessed"
+          ]
+        },
+        "protocol_id": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "review_ids": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/id"
+          },
+          "minItems": 0,
+          "uniqueItems": true
+        },
+        "measurements": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/measurement"
+          },
+          "minItems": 0
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "not_assessed"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "properties": {
+              "measurements": {
+                "maxItems": 0
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "assessed"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "properties": {
+              "protocol_id": {
+                "$ref": "#/$defs/id"
+              },
+              "review_ids": {
+                "minItems": 1
+              },
+              "measurements": {
+                "minItems": 1
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "measurements": {
+                "minItems": 1
+              }
+            },
+            "required": [
+              "measurements"
+            ]
+          },
+          "then": {
+            "properties": {
+              "protocol_id": {
+                "$ref": "#/$defs/id"
+              },
+              "review_ids": {
+                "minItems": 1
+              }
+            }
+          }
+        }
+      ]
+    },
+    "case_outcome": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "outcome_id",
+        "scope",
+        "endpoint",
+        "status",
+        "value",
+        "unit",
+        "measurement_timepoint",
+        "followup_days",
+        "source_locator",
+        "missing_reason"
+      ],
+      "properties": {
+        "outcome_id": {
+          "$ref": "#/$defs/id"
+        },
+        "scope": {
+          "enum": [
+            "simulated_technical_outcome",
+            "clinical_patient_outcome"
+          ]
+        },
+        "endpoint": {
+          "type": "string",
+          "minLength": 1
+        },
+        "status": {
+          "enum": [
+            "measured",
+            "missing"
+          ]
+        },
+        "value": {
+          "type": [
+            "boolean",
+            "number",
+            "string",
+            "null"
+          ]
+        },
+        "unit": {
+          "type": "string",
+          "minLength": 1
+        },
+        "measurement_timepoint": {
+          "type": "string",
+          "minLength": 1
+        },
+        "followup_days": {
+          "oneOf": [
+            {
+              "type": "number",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "source_locator": {
+          "$ref": "#/$defs/locator"
+        },
+        "missing_reason": {
+          "oneOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "missing"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "type": "null"
+              },
+              "missing_reason": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "value": {
+                "type": [
+                  "boolean",
+                  "number",
+                  "string"
+                ]
+              },
+              "missing_reason": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      ],
+      "description": "A source-linked case-level endpoint with its own timing and missingness. A favorable outcome is not proof that a generated claim or an individual action was correct."
+    },
+    "baseline_model": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "version",
+        "applicable_population",
+        "evaluation_reference",
+        "calibration_reference"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "applicable_population": {
+          "type": "string",
+          "minLength": 1
+        },
+        "evaluation_reference": {
+          "type": "string",
+          "minLength": 1
+        },
+        "calibration_reference": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "risk_comparison": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "outcome_id",
+        "prediction_type",
+        "expected_value",
+        "observed_value_numeric",
+        "observed_minus_expected",
+        "unit",
+        "higher_value_means",
+        "computed_at",
+        "method_reference"
+      ],
+      "properties": {
+        "outcome_id": {
+          "$ref": "#/$defs/id"
+        },
+        "prediction_type": {
+          "enum": [
+            "event_probability",
+            "expected_numeric_value"
+          ]
+        },
+        "expected_value": {
+          "type": "number"
+        },
+        "observed_value_numeric": {
+          "type": "number"
+        },
+        "observed_minus_expected": {
+          "type": "number"
+        },
+        "unit": {
+          "type": "string",
+          "minLength": 1
+        },
+        "higher_value_means": {
+          "enum": [
+            "better_outcome",
+            "worse_outcome"
+          ]
+        },
+        "computed_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "method_reference": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "prediction_type": {
+                "const": "event_probability"
+              }
+            },
+            "required": [
+              "prediction_type"
+            ]
+          },
+          "then": {
+            "properties": {
+              "expected_value": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              },
+              "observed_value_numeric": {
+                "enum": [
+                  0,
+                  1
+                ]
+              }
+            }
+          }
+        }
+      ],
+      "description": "A descriptive comparison for a measured endpoint. Semantic validation recomputes observed minus expected and verifies the matched endpoint, units, baseline provenance and prediction exposure."
+    },
+    "patient_risk_adjustment": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "status",
+            "reason"
+          ],
+          "properties": {
+            "status": {
+              "const": "unavailable"
+            },
+            "reason": {
+              "enum": [
+                "cadaveric_simulation_without_patient_baseline_or_recovery",
+                "baseline_patient_data_missing",
+                "clinical_outcome_missing",
+                "appropriate_baseline_model_unavailable",
+                "not_yet_assessed"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "status",
+            "baseline_annotation_ids",
+            "baseline_model",
+            "preoperative_information_only",
+            "predictions_out_of_sample",
+            "comparisons",
+            "interpretation"
+          ],
+          "properties": {
+            "status": {
+              "const": "research_estimate"
+            },
+            "baseline_annotation_ids": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/id"
+              },
+              "minItems": 1,
+              "uniqueItems": true
+            },
+            "baseline_model": {
+              "$ref": "#/$defs/baseline_model"
+            },
+            "preoperative_information_only": {
+              "const": true
+            },
+            "predictions_out_of_sample": {
+              "const": true
+            },
+            "comparisons": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/risk_comparison"
+              },
+              "minItems": 1
+            },
+            "interpretation": {
+              "const": "descriptive_case_comparison_not_proof_of_action_quality_or_text_correctness"
+            }
+          }
+        }
+      ],
+      "description": "Patient baseline adjustment is a distinct research analysis. Claims of preoperative exposure, out-of-sample prediction and appropriate calibration require supporting evidence; these flags do not prove them."
+    },
+    "text_block": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "text"
+      ],
+      "properties": {
+        "type": {
+          "const": "text"
+        },
+        "text": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "image_block": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "image"
+      ],
+      "properties": {
+        "type": {
+          "const": "image"
+        },
+        "image": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Portable image reference resolved to its recorded asset by the projection/loader. JSON contains a string; runtime hydration supplies an RGB PIL image."
+        }
+      }
+    },
+    "message": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "role",
+            "content"
+          ],
+          "properties": {
+            "role": {
+              "const": "user"
+            },
+            "content": {
+              "type": "array",
+              "items": {
+                "oneOf": [
+                  {
+                    "$ref": "#/$defs/text_block"
+                  },
+                  {
+                    "$ref": "#/$defs/image_block"
+                  }
+                ]
+              },
+              "minItems": 1
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "role",
+            "content"
+          ],
+          "properties": {
+            "role": {
+              "const": "assistant"
+            },
+            "content": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/text_block"
+              },
+              "minItems": 1
+            }
+          }
+        }
+      ]
+    },
+    "turn_link": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "turn_id",
+        "user_message_index",
+        "assistant_message_index",
+        "task",
+        "input_mode",
+        "cutoff_frame_index",
+        "student_frame_ids",
+        "student_annotation_ids",
+        "student_reference_asset_ids",
+        "expressed_claim_ids",
+        "question_origin",
+        "generation_run_ids",
+        "review_ids"
+      ],
+      "properties": {
+        "turn_id": {
+          "$ref": "#/$defs/id"
+        },
+        "user_message_index": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "assistant_message_index": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "task": {
+          "enum": [
+            "instrument_identification",
+            "spatial_localization",
+            "temporal_comparison",
+            "action_description",
+            "evidence_based_assessment",
+            "uncertainty_assessment",
+            "decision_support",
+            "outcome_prediction",
+            "retrospective_review"
+          ]
+        },
+        "input_mode": {
+          "enum": [
+            "causal_prefix",
+            "retrospective"
+          ]
+        },
+        "cutoff_frame_index": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "student_frame_ids": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/id"
+          },
+          "minItems": 0,
+          "uniqueItems": true
+        },
+        "student_annotation_ids": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/id"
+          },
+          "minItems": 0,
+          "uniqueItems": true
+        },
+        "student_reference_asset_ids": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/id"
+          },
+          "minItems": 0,
+          "uniqueItems": true
+        },
+        "expressed_claim_ids": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/id"
+          },
+          "minItems": 0,
+          "uniqueItems": true
+        },
+        "question_origin": {
+          "enum": [
+            "deterministic_template",
+            "model_generated",
+            "expert_authored"
+          ]
+        },
+        "generation_run_ids": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/id"
+          },
+          "minItems": 0,
+          "uniqueItems": true
+        },
+        "review_ids": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/id"
+          },
+          "minItems": 0,
+          "uniqueItems": true
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "question_origin": {
+                "const": "model_generated"
+              }
+            },
+            "required": [
+              "question_origin"
+            ]
+          },
+          "then": {
+            "properties": {
+              "generation_run_ids": {
+                "minItems": 1
+              }
+            }
+          }
+        }
+      ],
+      "description": "The actual student-facing input contract for one user/assistant pair. Presence in archive metadata is not evidence that an item was included in the prompt. Cross-field validation checks exact messages, claims, image identities and causal cutoffs."
+    },
+    "training_view": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "dialogue_origin",
+        "eligibility",
+        "exclusion_reasons",
+        "assistant_format",
+        "objective",
+        "loss_scope",
+        "messages",
+        "turn_links"
+      ],
+      "properties": {
+        "dialogue_origin": {
+          "const": "synthetic_training_dialogue"
+        },
+        "eligibility": {
+          "enum": [
+            "pending_review",
+            "eligible",
+            "excluded"
+          ]
+        },
+        "exclusion_reasons": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 0
+        },
+        "assistant_format": {
+          "enum": [
+            "plain_text",
+            "evidence_linked_explanation",
+            "structured_json"
+          ]
+        },
+        "objective": {
+          "const": "supervised_fine_tuning"
+        },
+        "loss_scope": {
+          "enum": [
+            "final_assistant_turn",
+            "all_assistant_turns"
+          ]
+        },
+        "messages": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/message"
+          },
+          "minItems": 0
+        },
+        "turn_links": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/turn_link"
+          },
+          "minItems": 0
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "eligibility": {
+                "const": "eligible"
+              }
+            },
+            "required": [
+              "eligibility"
+            ]
+          },
+          "then": {
+            "properties": {
+              "exclusion_reasons": {
+                "maxItems": 0
+              },
+              "messages": {
+                "minItems": 2
+              },
+              "turn_links": {
+                "minItems": 1
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "eligibility": {
+                "const": "excluded"
+              }
+            },
+            "required": [
+              "eligibility"
+            ]
+          },
+          "then": {
+            "properties": {
+              "exclusion_reasons": {
+                "minItems": 1
+              }
+            }
+          }
+        }
+      ],
+      "description": "Canonical training projection plus alignment metadata. The Unsloth export is exactly {messages:[...]}; turn links, claims, provenance, reviews and case outcomes are not automatically placed in the prompt. Drafts may have no completed dialogue."
+    },
+    "partition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "grouping_strategy",
+        "group_ids",
+        "split_manifest_asset_id"
+      ],
+      "properties": {
+        "name": {
+          "enum": [
+            "unassigned",
+            "train",
+            "validation",
+            "test"
+          ]
+        },
+        "grouping_strategy": {
+          "enum": [
+            "surgeon",
+            "patient",
+            "institution",
+            "combined"
+          ]
+        },
+        "group_ids": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/id"
+          },
+          "minItems": 0,
+          "uniqueItems": true
+        },
+        "split_manifest_asset_id": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "name": {
+                "const": "unassigned"
+              }
+            },
+            "required": [
+              "name"
+            ]
+          },
+          "then": {
+            "properties": {
+              "split_manifest_asset_id": {
+                "type": "null"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "group_ids": {
+                "minItems": 1
+              },
+              "split_manifest_asset_id": {
+                "$ref": "#/$defs/id"
+              }
+            }
+          }
+        }
+      ],
+      "description": "Partition assignment references an actual manifest. Corpus-level checks must prevent shared grouping identities or identical source images from spanning train/evaluation partitions."
+    },
+    "study_link": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "study_id",
+        "protocol_reference",
+        "experimental_arm",
+        "matched_comparison_group_id",
+        "evaluation_report_asset_id"
+      ],
+      "properties": {
+        "study_id": {
+          "$ref": "#/$defs/id"
+        },
+        "protocol_reference": {
+          "type": "string",
+          "minLength": 1
+        },
+        "experimental_arm": {
+          "enum": [
+            "original_annotations_deterministic_conversion",
+            "images_only_medgemma",
+            "annotation_grounded_medgemma",
+            "annotation_grounded_medgemma_with_temporal_context",
+            "other"
+          ]
+        },
+        "matched_comparison_group_id": {
+          "$ref": "#/$defs/id"
+        },
+        "evaluation_report_asset_id": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "training_value": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "study_links"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "not_evaluated",
+            "included_in_evaluation",
+            "evaluated"
+          ]
+        },
+        "study_links": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/study_link"
+          },
+          "minItems": 0
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "not_evaluated"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "properties": {
+              "study_links": {
+                "maxItems": 0
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "included_in_evaluation"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "properties": {
+              "study_links": {
+                "minItems": 1
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "evaluated"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "properties": {
+              "study_links": {
+                "minItems": 1,
+                "contains": {
+                  "properties": {
+                    "evaluation_report_asset_id": {
+                      "$ref": "#/$defs/id"
+                    }
+                  },
+                  "required": [
+                    "evaluation_report_asset_id"
+                  ]
+                },
+                "minContains": 1
+              }
+            }
+          }
+        }
+      ],
+      "description": "Links to comparative experiments measuring downstream training value. No per-record invented training-value score or causal clinical-effect claim is defined."
+    }
+  }
+}
