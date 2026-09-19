@@ -83,3 +83,6 @@ source_manifest.json
 *.pt
 *.pth
 *.log
+
+# Reviewed README artwork; source and dataset media remain excluded.
+!/docs/assets/yasargil-banner.webp

@@ -1,0 +1,265 @@
+# MedGemma review of Qwen annotations
+
+The current review sends **all selected stills from one surgery in one fresh
+MedGemma request**, together with their original Qwen annotations and relevant
+dataset metadata once. It returns a review for every selected frame in one
+response. The protocol is `medgemma-surgery-review-v1`.
+
+## Current surgery request
+
+The image set is exactly the final selected set, in chronological order. Each
+selected image appears once with its canonical frame ID and playback locator.
+There is **no automatic two before/two after expansion** and no extra Qwen-cited
+images. The 12-image cap belongs to the legacy per-frame protocol; it does not
+cap the surgery request.
+
+The request preserves the Qwen draft for each target: visible observation,
+visibility, contextual claims, and uncertainty. Shared procedure context,
+playback timing, and matching original dataset annotations are provided once.
+For SOSpine these include tool-tip and computed-box rows for the supplied
+images. Raw labels, coordinates, origins, source filenames, CSV locators, and
+hashes remain in the saved evidence. Missing or blank labels are not negative
+evidence. Outcomes, surgeon experience, and recorded repair duration remain
+excluded from model input.
+
+The prompt identifies Qwen as a general-purpose, non-specialist model whose
+draft has not been expert-validated. MedGemma receives that draft and should
+retain supported content. This is an assisted review, not a blind first pass.
+Only the target image establishes what is directly visible in that target;
+contextual interpretations and corrections must cite supplied frame IDs.
+
+Qwen saw the complete supplied video, while MedGemma receives selected stills.
+An event absent from these stills does not disprove Qwen's contextual claim.
+Unverified claims should retain uncertainty and, when needed, a request for
+more evidence. Cited source images not supplied to MedGemma are identified in
+the packet. Nominal playback timestamps do not establish original procedure
+elapsed time or complete procedure coverage.
+
+**Further evidence requests are saved for later.** They do not dispatch Qwen,
+TimeLens2, tools, or retrieval. A case may finish as
+`completed_with_deferred_evidence`; a normal `completed` status also remains
+subject to human review. Structural and locator checks do not establish that
+the descriptions are clinically correct.
+
+## Context and answer budgets
+
+The defaults are **65,536 context tokens** and **16,384 output tokens**. Images,
+metadata, drafts, instructions, and the reserved answer must fit together. The
+answer budget is shared by all selected frames in the surgery; fitting the
+images alone is insufficient. Verify the assembled request's token usage,
+including image preprocessing overhead.
+
+The response must cover the exact selected target set. Missing targets, invalid
+citations, an unfinished response, or insufficient context cannot become a
+completed surgery review. There is no automatic frame dropping or per-frame
+fallback. Changing a frozen budget or protocol requires a separate planned run.
+
+## Run the surgery review
+
+Use an installed vision-capable `medgemma:27b` through local Ollama; model
+downloads are not implicit. Start from a completed Qwen annotation pass.
+
+```sh
+.venv/bin/python -m yasargil.medgemma_surgery_review \
+  --annotation-run outputs/annotation_pairs/SOSpine_first_two/S2A2 \
+  --output-dir outputs/medgemma_surgery_reviews/S2A2 \
+  --prepare-only
+
+.venv/bin/python -m yasargil.medgemma_surgery_review \
+  --output-dir outputs/medgemma_surgery_reviews/S2A2 --resume
+```
+
+Each surgery directory preserves the Qwen source snapshots, supplied evidence,
+exact request bytes, original response, validated per-target reviews, model
+identity, accepted-response receipts, summary, and offline report. The one
+response is mapped to frame reviews without rewriting original Qwen annotations
+or source files. Explicit resume verifies accepted receipts and reuses them
+without another model call. Received bytes from failed attempts remain saved.
+
+## Two-case review runner
+
+The scoped runner reviews only **S2A2 and S1A2**, serially. It waits for both Qwen
+annotation jobs to finish and release their worker lock. It verifies both
+annotation integrity manifests before loading MedGemma and rechecks each source
+after its review.
+
+```sh
+.venv/bin/python -m yasargil.medgemma_pair \
+  --annotation-pair outputs/annotation_pairs/SOSpine_first_two \
+  --output-dir outputs/medgemma_pairs/SOSpine_first_two \
+  --prepare-only
+
+.venv/bin/python -m yasargil.medgemma_pair \
+  --output-dir outputs/medgemma_pairs/SOSpine_first_two --resume
+```
+
+The pair protocol is `sospine-first-two-medgemma-surgery-v1`. Its `run.json` pins
+the prompt, 65,536/16,384 token budgets, and parent plan. Its `state.json` records
+each case's status and report. The timeout is **21,600 seconds per surgery**, a
+ceiling rather than an ETA. Each case makes one joint request containing all
+its selected stills and drafts. The other dataset cases remain outside this trial.
+
+A failed case is recorded before proceeding to the other planned case.
+Explicit resume verifies completed bundles and accepted raw responses without
+repeating accepted inference. A `.pause-requested` file stops before the next
+case; remove it before an explicitly requested resume. An old per-frame pair
+plan must remain archived separately rather than being relabeled or resumed
+under the surgery protocol.
+
+### Explicit intake of rejected Qwen timestamp citations
+
+Strict mode remains the default. An explicitly configured run can review Qwen
+drafts whose only validation failures are temporal citations by preparing a
+**new** pair with `--allow-rejected-temporal-citations`:
+
+```sh
+.venv/bin/python -m yasargil.medgemma_pair \
+  --annotation-pair outputs/annotation_pairs/SOSpine_first_two \
+  --output-dir outputs/medgemma_pairs/SOSpine_first_two_temporal_rejections \
+  --allow-rejected-temporal-citations --prepare-only
+
+.venv/bin/python -m yasargil.medgemma_pair \
+  --output-dir outputs/medgemma_pairs/SOSpine_first_two_temporal_rejections --resume
+```
+
+The override is frozen in the new plan and inherited on resume. It cannot be
+enabled on an existing strict plan. Both planned Qwen jobs must first reach
+`completed`, `context_conflict`, or `failed` and release their worker lock.
+Completed outputs still require valid annotation integrity manifests. Failed
+outputs must pass the rejected-draft intake audit; other failures remain blocked.
+
+The pair saves that audit and its artifact hashes in `qwen-evidence.json`, pins
+its exact bytes, and rechecks the source before and after each MedGemma review.
+Original raw Qwen responses, invalid citations, and provenance remain intact.
+Rejected drafts receive **no annotation completion seal** and are explicitly
+identified as rejected temporal evidence for MedGemma and human review.
+
+## Legacy per-frame review
+
+`review-frame-annotations` remains available for the original
+`medgemma-frame-review-v1` protocol and historical artifacts.
+It runs one fresh local MedGemma conversation per selected key frame, containing
+the original Qwen annotation, the target image, ordered surrounding images, and
+relevant original dataset annotations. MedGemma can retain, correct, or revise
+the draft and record unresolved questions.
+
+**Further evidence requests are saved for later.** This stage never invokes
+Qwen, TimeLens2, or a retrieval loop. A request for more evidence does not prevent
+the remaining key frames from being reviewed. The full model response is saved,
+including any additional envelope fields, before its content is validated.
+
+### Run the legacy protocol
+
+Use an installed vision-capable `medgemma:27b` through local Ollama. There are no
+implicit model downloads. First prepare the evidence and an offline report:
+
+```sh
+.venv/bin/python -m yasargil review-frame-annotations \
+  --annotation-run outputs/annotation_pairs/SOSpine_first_two/S2A2 \
+  --output-dir outputs/medgemma_reviews/S2A2_legacy \
+  --prepare-only
+```
+
+Start the prepared pass:
+
+```sh
+.venv/bin/python -m yasargil review-frame-annotations \
+  --output-dir outputs/medgemma_reviews/S2A2_legacy --resume
+```
+
+Omit `--prepare-only` from the first command to prepare and review in one run.
+The input must be a finished Qwen annotation run with verified complete-video
+receipts. A finished annotation reporting a context conflict is also accepted
+for MedGemma assessment. Earlier completed annotation prompts remain usable;
+the stage checks their saved requests and responses without rerunning Qwen.
+
+### Legacy evidence selection and context
+
+Defaults include the nearest **two before and two after** source observations
+and the key frame. These are neighbors in the complete source inventory, not
+just neighboring selected key frames. The remaining image budget includes
+observations from Qwen's cited intervals, prioritizing uncovered intervals and
+then temporal diversity within them. All images are presented chronologically
+with explicit target/before/after/Qwen-context roles and canonical locators.
+
+The default total budget is **12 images including the target**. Configure it with
+`--before-frames`, `--after-frames`, and `--max-context-frames`. The budget must
+fit the requested neighbors plus the target and cannot exceed 32. Sequence
+boundaries and every omitted cited source observation are recorded explicitly.
+The model sees these limitations. No observations or missing timestamps are
+invented. SOSpine timestamps retain the reconstruction's nominal playback
+timeline; original video sources retain their PTS timeline.
+
+For a verified SOSpine source layout, the dataset root is inferred automatically.
+An explicit `--dataset-root` must match the exact source case and release files.
+The packet includes matching rows from `sospine_tool_tips.csv` and
+`sospine_bbox.csv` for every supplied image. Raw coordinates, whitespace, labels,
+manual/computed origins, CSV record locators, and file hashes are retained.
+Missing or blank annotations are identified as unavailable, never negative
+labels. Procedure background is inherited from the Qwen annotation run.
+Case outcomes, surgeon experience, and recorded repair durations are excluded.
+Other source types still receive visual evidence and documented parent context;
+unavailable dataset annotations are recorded as such.
+
+The review prompt explicitly identifies Qwen as a general-purpose, non-specialist
+vision-language model whose draft has not been expert-validated. MedGemma still
+receives that draft and must retain correct content; the warning does not make
+MedGemma's judgment ground truth. Corrections require supporting visual evidence.
+The prompt also explains the difference in coverage: Qwen processed the complete
+supplied video, while MedGemma receives a limited packet of stills. An event's
+absence from that packet does not disprove a contextual claim. When the supplied
+views cannot verify a claim, MedGemma must record uncertainty and request missing
+evidence rather than treat the claim as false.
+
+MedGemma receives ordered still images, not a native full-video request. Its
+prompt separates what is visible in the target from interpretations based on
+neighboring frames. Revised contextual claims and corrections cite supplied
+frame IDs. Further evidence requests include a question, reason, evidence type
+(`target_detail`, `temporal_context`, or `dataset_context`), and an optional
+paired playback interval. These requests are descriptive records, not dispatched
+tool calls.
+
+### Legacy checkpoints and review artifacts
+
+```sh
+.venv/bin/python -m yasargil frame-review-status \
+  --output-dir outputs/medgemma_reviews/S2A2_legacy
+
+.venv/bin/python -m yasargil pause-frame-review \
+  --output-dir outputs/medgemma_reviews/S2A2_legacy
+```
+
+Pause and the first `Ctrl+C` let the active response finish and save before the
+next frame. A second interruption stops immediately. Resume reuses accepted
+responses, including responses saved just before interruption, without another
+inference call. Failed attempts retain their raw responses and are retried only
+on explicit resume. Model identity, runtime version, source snapshots, settings,
+requests, and accepted response hashes are checked before reuse.
+
+| Artifact | Contents |
+| --- | --- |
+| `qwen/` | Frozen parent run, original annotation, and full-video call receipts |
+| `evidence/frame-*.json` | Exact per-keyframe evidence and original dataset rows |
+| `calls/frame-*/attempt-*/request.json` | Exact Ollama request with encoded images |
+| `calls/frame-*/attempt-*/response.json` | Complete raw response, including rejected/truncated bodies when received |
+| `calls/frame-*/attempt-*/review.json` | Validated revision linked to original Qwen content and evidence |
+| `calls/frame-*/attempt-*/receipt.json` | Hashes binding accepted request, response, model metadata, and revision |
+| `calls/frame-*/attempt-*/failure.json` | Failed call details, when present |
+| `reviews.json` | All completed frame reviews so far, including unresolved frames |
+| `deferred-evidence.json` | Undispatched requests with links to the whole responses and reviews |
+| `summary.json` | Progress and counts, including frames needing more evidence |
+| `report.html` | Offline visual comparison, evidence, corrections, uncertainties, and raw-call links |
+
+The run finishes as `completed` or `completed_with_deferred_evidence`.
+Neither status means human approval or clinical validation. Original and revised
+annotations remain drafts, and this pass does not export training data.
+Structured output and locator checks cannot establish whether a claim is true.
+Ollama prompt usage is checked against the configured context/output budgets;
+it does not provide the native full-video coverage receipt used by Qwen.
+
+Defaults are 65,536 context tokens and 4,096 output tokens (`--num-ctx` and
+`--num-predict`). Use a new directory to change a frozen pass's configuration or
+apply an updated review prompt. Existing saved reviews retain their original
+requests and are not relabeled as having received the non-specialist warning.
+`--medgemma-model` selects an explicit installed tag; `--ollama-url` is restricted
+to a loopback HTTP origin by the existing transport.
