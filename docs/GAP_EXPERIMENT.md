@@ -6,6 +6,11 @@ all candidates by their contribution to understanding the visible procedure,
 then independent sessions receive the top 50%, 30%, or 10%. Every session receives
 the complete native video. Only the candidate stills change between conditions.
 
+The experiment uses Qwen's local llama.cpp native-video path. Its rankings,
+reasons, and evidence questions are model-generated proposals, separate from
+SOSpine's original tool-label/coordinate CSV rows. See [runtime setup and migration status](LLAMA_CPP.md#migration-from-ollama)
+for the move from Ollama and ongoing validation.
+
 The current protocol is `native-video-gap-experiment-v2`. It replaces the first
 experiment's opposite omission policy, which supplied the least-important
 candidates. Historical runs and their original condition labels remain intact.

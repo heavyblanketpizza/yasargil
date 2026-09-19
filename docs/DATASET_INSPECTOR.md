@@ -71,14 +71,25 @@ input; MedGemma specializes in medical text and images. The model names remain
 visible, and the labels do not imply adaptation during review. Other
 source frames and undecided candidates show only **Human review** and **Frame
 source data**, with no empty AI annotation section or supporting-evidence strip.
-The comparison includes Qwen's selection reason and original annotation alongside MedGemma's saved revision, contextual
-claims, uncertainties, corrections, and deferred evidence requests. On narrow
+The comparison includes Qwen's selection reason and generated draft alongside
+MedGemma's saved revision, contextual claims, uncertainties, corrections, and
+deferred evidence requests. On narrow
 screens the model sections stack. Evidence-time links jump to cited source frames.
 Prepared review evidence is labeled separately from evidence in a saved MedGemma
 response. Missing or pending annotations are never filled with generated content.
 Qwen and MedGemma's additions are labeled **AI-generated annotations**. Model
 annotations, original dataset fields, and human notes use black or gray text;
-labels identify their origin. The interface uses Meslo Nerd typography.
+labels identify their origin. The interface uses Meslo when installed locally,
+with a system monospace fallback. Font files are not bundled or downloaded.
+
+Qwen writes the descriptive observations, video-context claims, and uncertainty
+from the complete supplied video and selected stills. Its full-video annotation
+request does not include the original SOSpine CSV labels. The current MedGemma
+review receives all selected stills together with those Qwen drafts and matching
+source CSV labels in one surgery request. The saved legacy per-frame protocol
+instead includes a target and bounded surrounding stills. Neither MedGemma
+protocol receives the complete native video; the displayed saved evidence
+identifies the images actually supplied. See [review protocols](MEDGEMMA_FRAME_REVIEW.md).
 
 ## Edit or remove an enhancement
 
@@ -99,8 +110,12 @@ dataset revision. They survive a server restart and are included in review
 exports. They are draft curation, not an automatic training approval. A change
 to an enhancement resets its previous Reviewed assessment while keeping notes.
 
-**Source data** contains original tool-tip and bounding-box rows, exact frame
-provenance, and expandable complete records. Raw model responses and run artifacts
+**Source data** contains original manual tool-tip rows (`sospine_tool_tips.csv`)
+and computed bounding-box rows (`sospine_bbox.csv`). These contain instrument
+labels and coordinates, separate from Qwen and MedGemma's generated prose.
+Preserving exact rows and CSV locators establishes their source, not their
+correctness. Source data also contains exact frame provenance and expandable
+complete records. Raw model responses and run artifacts
 have direct links. Downstream runs are matched by source identity, parent paths,
 selection hashes, and frozen annotations so unrelated gap experiments do not
 supply annotations to a normal selection.
@@ -149,6 +164,9 @@ existing formal review or training-export gates.
 ## Local operation
 
 The interface uses bundled HTML, CSS, and JavaScript without remote dependencies.
+Current generation code uses local llama.cpp; historical saved Ollama artifacts
+retain their original runtime identity. The inspector itself only reads these
+artifacts. See [runtime migration status](LLAMA_CPP.md#migration-from-ollama).
 The server binds only to `127.0.0.1`, serves explicitly registered media/artifacts,
 supports video byte ranges, and saves human curation separately from source
 artifacts. Source drives must

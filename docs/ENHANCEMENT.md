@@ -1,14 +1,16 @@
 # Local Qwen–MedGemma enhancement
 
-Updated 2026-09-12. This describes the offline loop in [enhancement.py](../src/yasargil/enhancement.py), its [teacher adapter](../src/yasargil/teacher.py), full-sequence batch processing, durable pause/resume and [CLI](../src/yasargil/__main__.py). Download the dataset separately as described in [Data sources](DATA_SOURCES.md).
+Updated 2026-09-19. This describes the offline loop in [enhancement.py](../src/yasargil/enhancement.py), its [teacher adapter](../src/yasargil/teacher.py), full-sequence batch processing, durable pause/resume and [CLI](../src/yasargil/__main__.py). Download the dataset separately as described in [Data sources](DATA_SOURCES.md).
 
-The loop creates evidence-linked proposals and a review packet from a bounded SOSpine window. Inputs are released JPEGs and exact visual annotation rows; output is an archive plus a proposed multimodal conversation. It does not approve its own output for training.
+The loop creates evidence-linked proposals and a review packet from a bounded SOSpine window. Inputs are released JPEGs and the original CSV tool labels and coordinates: manually annotated instrument/durotomy points and bounding boxes computed from those points. Qwen writes new descriptive proposals from that evidence; MedGemma observes, reviews and revises them. The original rows are not prewritten descriptions. Output is an archive plus a proposed multimodal conversation, pending human review.
+
+This page describes the annotation-conditioned `enhance-sospine` loop. The separate [full-video annotation path](FRAME_ANNOTATION.md) gives Qwen the complete source video and frozen selected stills without source CSV labels; those labels are added later for [MedGemma frame review](MEDGEMMA_FRAME_REVIEW.md) when verified SOSpine tables are available. New inference code in both paths now uses llama.cpp; see the [Ollama migration reasons and local setup/validation status](LLAMA_CPP.md#migration-from-ollama).
 
 ## Responsibilities and call order
 
 | Stage | Model and direct evidence | Responsibility |
 |---|---|---|
-| `propose` | Qwen; initial uniformly selected frames and their original visual annotations. | Propose observations, bounded interpretations, questions, uncertainty and evidence requests. |
+| `propose` | Qwen; initial uniformly selected frames and their original CSV labels and coordinates. | Write new observations, bounded interpretations, questions, uncertainty and evidence requests. |
 | `independent_observe` | MedGemma; the same initial frames/annotations, without Qwen's output. | Record an initial observation before reading the proposal. This is proposal independence, not an annotation-blind evaluation. |
 | `review` | MedGemma; initial frames plus both preceding outputs. | Inspect claims against images, preserve disagreements and request additional frame intervals for unresolved questions. |
 | `search` | Qwen; new frames in requested intervals, plus the preceding review and its retained ancestry. | Reinspect local evidence for the review's questions. The direct image payload contains the newly selected frames. |
@@ -16,7 +18,7 @@ The loop creates evidence-linked proposals and a review packet from a bounded SO
 
 The first three calls form the initial loop. Each optional round adds two calls, so `R` allowed search rounds permit at most `3 + 2R` logical stages per window. The loop stops when no further evidence is requested, no unseen released frame exists in requested intervals, the frame budget is exhausted, or the round budget is reached. Unresolved requests remain recorded; agreement is not forced. Explicit resume may repeat a failed or unfinished stage, adding an inference attempt beyond this logical-stage ceiling; already completed stages are replayed without inference.
 
-“Search” means inspecting additional **local SOSpine images**, not searching the web or literature. Qwen is the targeted reinspector. A TimeLens2 adapter is not implemented. Ollama receives ordered base64 images with release-index captions; this path does not invoke a native video processor or transmit an MP4. General video-model capability does not prove that this transport exercised it.
+“Search” means inspecting additional **local SOSpine images**, not searching the web or literature. Qwen is the targeted reinspector. A TimeLens2 adapter is not implemented. llama.cpp receives ordered image data URLs with release-index captions through its OpenAI-compatible chat endpoint; this path does not invoke a native video processor or transmit an MP4. General video-model capability does not prove that this transport exercised it.
 
 ## Source and temporal bounds
 
@@ -24,7 +26,7 @@ The inspected release has 15,694 JPEGs in 24 sequences, sampled at 1 fps from re
 
 Case, start index and cutoff are fixed before model calls. Initial selection samples deterministically across available release indices in that window. Later selection uses unseen frames within requested intervals and the same original window. Requests share the per-round budget rather than letting the first interval consume it all. Parent outputs and their evidence exposure remain linked to later calls.
 
-Original tool-tip rows and computed box rows are supplied with distinct origins and raw values. They are source evidence, not verified model observations or guaranteed error-free labels. Outcome rows, surgeon experience and other case metadata are excluded from model payloads. A visible pressure test can still reveal information through pixels; metadata exclusion does not guarantee effective outcome blinding or forecast eligibility.
+Original tool-tip rows and computed box rows are supplied with distinct origins and raw values. “Exact” row preservation means retaining the released values, CSV row locations and file hashes; it does not imply error-free labels. These rows remain source evidence, separate from the new model-generated descriptions. Outcome rows, surgeon experience and other case metadata are excluded from model payloads. A visible pressure test can still reveal information through pixels; metadata exclusion does not guarantee effective outcome blinding or forecast eligibility.
 
 | Setting | Default | Enforced bound or meaning |
 |---|---|---|
@@ -33,27 +35,25 @@ Original tool-tip rows and computed box rows are supplied with distinct origins 
 | `--max-frames` | 24 | At most 32 distinct selected source frames per window. |
 | `--max-rounds` | 1 | 0–3 rounds; at most 3–9 logical stages per window, excluding repeated unfinished attempts. |
 | `--start-index`, `--cutoff-index` | Required | Positive inclusive indices in order, spanning at most 3,600 release indices. |
-| `--num-ctx` | 65,536 | Requested Ollama context, 8,192–131,072; must fit the chosen model/hardware. |
+| `--num-ctx` | 65,536 | Requested llama.cpp context, 8,192–131,072; must fit the chosen model/hardware. |
 | `--num-predict` | 4,096 | Requested generation ceiling, 512–8,192. Truncated output fails validation. |
 | `--seed` | 42 | Recorded with temperature 0; not a guarantee of identical output across runtime/hardware changes. |
-| `--timeout` | 600 seconds | Per Ollama request; no automatic retries. |
+| `--timeout` | 600 seconds | Per llama.cpp request; no automatic retries. |
 
-The frame ceiling is not a memory or latency guarantee. Ollama applies the model's internal image processing. The application preserves original JPEG bytes and order, but does not record internal crop/patch tensors or claim control of a native video sampler.
+The frame ceiling is not a memory or latency guarantee. llama.cpp applies the model's internal image processing. The application preserves original JPEG bytes and order, but does not record internal crop/patch tensors or claim control of a native video sampler.
 
 ## Setup and a single window
 
-Use the repository's Python 3.12 selection and locked core dependencies. Ollama runs as a separate local service; GPU training dependencies are outside this core lock.
+Use the repository's Python 3.12 selection and locked core dependencies. Install the pinned llama.cpp runtime and matching GGUF model/projector files as described in [Local llama.cpp setup](LLAMA_CPP.md). The client starts an owned local server on demand and stops it after the request; GPU training dependencies are outside this core lock.
 
 ```bash
 uv sync --frozen
 uv run yasargil models
 ```
 
-Defaults are `qwen3.8:27b-q4_K_M` and `medgemma:27b`. Both were found installed with Ollama 0.34.0 during development. Each run resolves exact installed tags and vision capability, then saves full tags/show/version responses, model digest and quantization. `models --pull` explicitly downloads or updates the requested tags; inference never pulls implicitly.
+Defaults are `qwen3.8-27b` and `medgemma-27b`. Each run inspects the local GGUF model and vision projector, records their SHA-256 identities and quantization, and pins the llama.cpp runtime identity. `models` checks these local artifacts without downloading weights or starting inference.
 
 ```bash
-uv run yasargil models --pull
-
 uv run yasargil enhance-sospine \
   --dataset-root "/path/to/datasets/SOSpine" \
   --case-id S1A2 --start-index 1 --cutoff-index 12 \
@@ -73,7 +73,7 @@ uv run yasargil enhance-sospine \
   --output-dir outputs/example
 ```
 
-A new run requires a new output directory outside the dataset root. To continue an existing compatible run, use `resume-enhancement --output-dir outputs/example`, or repeat the original `enhance-sospine` configuration with `--resume`. Failed/interrupted attempts remain available for inspection; resumption never silently replaces their bytes. Overrides `--qwen-model` and `--medgemma-model` must name different installed vision-capable tags. `--ollama-url` defaults to `http://127.0.0.1:11434`; transport accepts loopback HTTP only and disables redirects/proxies.
+A new run requires a new output directory outside the dataset root. To continue an existing compatible run, use `resume-enhancement --output-dir outputs/example`, or repeat the original `enhance-sospine` configuration with `--resume`. Failed/interrupted attempts remain available for inspection; resumption never silently replaces their bytes. Overrides `--qwen-model` and `--medgemma-model` must select the distinct supported local model aliases. `--project-root` identifies the directory containing `.runtime/` and defaults to the project working directory; `--timeout` sets the request deadline. The client owns its loopback-only server; there is no external service URL or backend fallback.
 
 ## Full-sequence batches
 
@@ -118,11 +118,13 @@ uv run yasargil resume-enhancement --output-dir outputs/sospine-best-worst
 
 Run/resume commands stay in the foreground unless launched separately as background processes. A foreground resume remains attached to its terminal, with the same first/second `Ctrl+C` behavior. A background worker uses the same status/pause/resume interface; retain its logs in your local output directory.
 
-`resume-enhancement` loads the saved configuration, with only connection settings such as `--ollama-url` and `--timeout` supplied separately. It validates completed artifacts and reconstructs the deterministic loop from retained outputs. The checkpoint is progress metadata, not permission to trust arbitrary cached answers. If a completed response is valid, replay avoids another inference call; if an attempt did not finish, an explicit resume can make a new attempt while retaining the old one.
+`resume-enhancement` loads the saved configuration, with only local runtime settings such as `--project-root` and `--timeout` supplied separately. It validates completed artifacts and reconstructs the deterministic loop from retained outputs. The checkpoint is progress metadata, not permission to trust arbitrary cached answers. If a completed response is valid, replay avoids another inference call; if an attempt did not finish, an explicit resume can make a new attempt while retaining the old one.
 
-Persistence is at the application/call level. **No Ollama KV cache, in-flight token stream or whole-case hidden state is saved.** You can stop the worker and return later with the same source and models available; resumption rebuilds needed context from saved bytes. Even a completed job is verified against source artifacts and current Ollama model metadata before returning without inference. Keep the local Ollama service reachable for that check; only `enhancement-status` is independent of it. This does not establish identical output for a retried unfinished call across hardware/runtime changes.
+Persistence is at the application/call level. **No model KV cache, in-flight token stream or whole-case hidden state is saved.** You can stop the worker and return later with the same source and models available; resumption rebuilds needed context from saved bytes. Even a completed job is verified against source artifacts and the current local model, projector and runtime identities before returning without inference. Keep those files available for that check; no model server needs to be running. `enhancement-status` is independent of them. This does not establish identical output for a retried unfinished call across hardware/runtime changes.
 
-Resume guards bind the saved plan/configuration, source frame and metadata hashes, prompt/schema/version fingerprint, model digest, quantization and runtime version. A changed source, model tag target, prompt or configuration must not be mixed into an earlier run. Keep source files available at the saved dataset path and retain output artifacts intact; use a new output directory for a changed experiment. An intentional model/runtime update can therefore require a new job. A writer lock prevents two workers from mutating the same job concurrently.
+Resume guards bind the saved plan/configuration, source frame and metadata hashes, prompt/schema/version fingerprint, model/projector hashes, quantization and runtime identity. A changed source, model or projector file, runtime, prompt or configuration must not be mixed into an earlier run. Keep source files available at the saved dataset path and retain output artifacts intact; use a new output directory for a changed experiment. An intentional model/runtime update can therefore require a new job. A writer lock prevents two workers from mutating the same job concurrently.
+
+Runs created with Ollama cannot resume under llama.cpp. Keep their requests, responses and archives intact as historical evidence, and create a new output directory using the `llama-cpp-evidence-v1` adapter. The historical `ollama-evidence-v1` verifier remains read-only; it does not migrate old runs. There is no backend switch or fallback. See [Migration from Ollama](LLAMA_CPP.md#migration-from-ollama) for the rationale and model-file transition.
 
 Earlier outputs without `session.json` do not have the snapshot required for durable resume. Resume rejects those directories rather than inventing a missing source/prompt snapshot; start a new job to use checkpoints. A successful explicit resume clears its pause request only after obtaining the writer lock.
 
@@ -137,10 +139,10 @@ Each single-window directory, including a window nested inside a batch, retains:
 | `plan.json` | Fixed configuration, candidate indices, initial selection and limits. |
 | `session.json` | Resume identity: dataset path, plan digest, source-file hashes for the allowed window, prompt/schema identity and stable creation metadata. |
 | `checkpoint.json` | Atomically updated progress and successful-call count. States include initializing, running, paused, failed, interrupted, finalizing and completed. Selected indices are distinguished from frames observed by successful calls. |
-| `models/qwen.json`, `models/medgemma.json` | Model identity, digest, quantization, capabilities and raw runtime metadata. |
+| `models/qwen.json`, `models/medgemma.json` | Model and projector identities/hashes, quantization, capabilities and runtime identity. |
 | `models/manifest.json` | Pinned model identities and hashes of their retained raw metadata receipts. |
-| `calls/run-NNN-STAGE/request.json` | Exact canonical UTF-8 request bytes, including ordered base64 image bytes. Files can be large. |
-| `calls/run-NNN-STAGE/response.json` | Exact response bytes and complete Ollama envelope. Available malformed responses are retained on failure. |
+| `calls/run-NNN-STAGE/request.json` | Exact canonical UTF-8 request bytes, including ordered image data URLs and the structured response schema. Files can be large. |
+| `calls/run-NNN-STAGE/response.json` | Exact response bytes and complete OpenAI-compatible chat response envelope. Available malformed responses are retained on failure. |
 | `calls/run-NNN-STAGE/run.json` | Model, prompt/settings, direct evidence, cutoff and parent-run lineage. |
 | `calls/run-NNN-STAGE/parsed.json` | Validated output, call timing and reported token counters. |
 | `calls/run-NNN-STAGE/success.json` | Hashes binding a completed attempt's request, run, response and parsed files. Repeated attempts have their own receipt. |
@@ -171,9 +173,9 @@ Validation without source roots cannot grant byte-verified teacher eligibility. 
 
 ## Exact lineage and its limits
 
-The `ollama-evidence-v1` adapter reconstructs canonical requests from recorded fields, actual image bytes, exact CSV annotation rows, versioned prompts/fixed stage questions and validated parent responses. It compares that reconstruction with retained request bytes. It verifies model-metadata consistency, finished response envelopes, evidence references/windows, generated claim/question text, and correspondence between teacher exposure and student frame context.
+The `llama-cpp-evidence-v1` adapter reconstructs canonical requests from recorded fields, actual image bytes, original CSV labels and coordinates preserved verbatim, versioned prompts/fixed stage questions and validated parent responses. It compares that reconstruction with retained request bytes. It verifies model-metadata consistency, finished response envelopes, evidence references/windows, generated claim/question text, and correspondence between teacher exposure and student frame context.
 
-Requests disable thinking and tool calls and require structured JSON. Unsupported or unfinished envelopes fail; parsing does not approve medical content. Byte reconstruction establishes internal consistency of saved artifacts, not cryptographic server attestation or a guarantee that the model interpreted its evidence correctly.
+Requests disable thinking and tool calls and require structured JSON through OpenAI-compatible `response_format` with a JSON schema. Unsupported or unfinished envelopes fail; parsing does not approve medical content. Byte reconstruction establishes internal consistency of saved artifacts, not cryptographic server attestation or a guarantee that the model interpreted its evidence correctly.
 
 All stage proposals remain model-origin claims pending review. The conversation projects the final response; contradicted final events are excluded from that projection, while prior proposals remain in the archive. It may contain a summary and multiple question/answer turns. Its current loss scope is `all_assistant_turns`; [Training](TRAINING.md) shows matching loader/trainer settings. Parent-call text is teacher context, not an automatically exported chain-of-thought trace.
 

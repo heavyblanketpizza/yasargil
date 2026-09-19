@@ -19,15 +19,33 @@ records when using SOSpine; Yasargil is a separate processing project.
 | Required source | Official record | Local destination under your dataset root |
 | --- | --- | --- |
 | Released JPEG frames | [frames.zip](https://doi.org/10.6084/m9.figshare.20201636.v1) | `frames/<case>/<case>_frame_########.jpeg` |
-| Tool-tip annotations | [sospine_tool_tips.csv](https://doi.org/10.6084/m9.figshare.20171135.v1) | `sospine_tool_tips.csv` |
+| Human-labeled tool points | [sospine_tool_tips.csv](https://doi.org/10.6084/m9.figshare.20171135.v1) | `sospine_tool_tips.csv` |
 | Computed bounding boxes | [sospine_bbox.csv](https://doi.org/10.6084/m9.figshare.20171129.v1) | `sospine_bbox.csv` |
 | Simulated trial outcomes | [sospine_outcomes.csv](https://doi.org/10.6084/m9.figshare.20171132.v1) | `sospine_outcomes.csv` |
 | Original description and notices | [readme.txt](https://figshare.com/articles/dataset/readme_txt/20171138) | `documentation/readme.txt` |
 
 Preserve the original notices with your download. The inspected author readme
-says CC BY-NC 4.0 while the Figshare records say CC BY 4.0. Yasargil retains that
+says CC BY-NC 4.0, while the Figshare project, individual records, and the
+descriptor's **Data Records** section say CC BY 4.0. Yasargil retains that
 discrepancy in provenance; it does not resolve it or grant additional rights.
-Check the publisher's terms for your intended use.
+
+### Noncommercial experiments
+
+Local analysis, annotation experiments, and experimental training for a
+noncommercial purpose appear consistent with both published notices: even
+[CC BY-NC 4.0](https://creativecommons.org/licenses/by-nc/4.0/) permits copying
+and adaptation for noncommercial purposes. Credit the dataset authors, cite the
+release and descriptor, retain the supplied notices and license links, and
+identify your modifications and generated annotations when sharing results.
+Do not imply that the authors endorse Yasargil or its outputs.
+
+“Noncommercial” concerns the purpose of the use, not simply whether an experiment
+earns revenue. Research directed toward commercial advantage is not automatically
+noncommercial. Seek clarification from the dataset authors before relying on
+the conflicting notices for commercial product work. The repository's Apache
+license does not relicense the dataset; model weights and services have their
+own terms. These observations describe the published permissions, not a legal
+determination for every project.
 
 ## Download and arrange your own copy
 
@@ -136,14 +154,30 @@ paper's counts or interpreting reconstructed timestamps as acquisition times.
 ## What Yasargil does with the data
 
 Yasargil reads the original JPEGs and annotation tables without changing them.
+The original visual annotations are CSV rows containing a frame filename, a
+label, and coordinates: human-labeled tool tips/bases and durotomy ends in
+`sospine_tool_tips.csv`, plus boxes computed from those points in
+`sospine_bbox.csv`. These tables do not contain the descriptive prose generated
+by Yasargil. Keeping an exact row means preserving the original values and
+source locator; it does not assert that the label or geometry is error-free.
+
 The deterministic importer re-expresses selected source instrument labels and
-retains the exact evidence references. The selection and annotation workflows
-produce model proposals, source hashes, model-call records, and review artifacts
-in a separate output directory. Reconstructed videos use explicit sampling
+retains the exact evidence references. In the complete-video annotation path,
+Qwen writes new visible observations, contextual claims, and uncertainty from
+the supplied video and selected stills, without the original CSV labels. The
+later MedGemma review receives those drafts, selected images, and matching
+source labels when available. The separate bounded enhancement loop supplies
+original label/coordinate rows to both models from the outset.
+
+These workflows produce model proposals, source hashes, model-call records,
+and review artifacts in a separate output directory. Reconstructed videos use explicit sampling
 assumptions; generated descriptions remain proposals pending human review.
 Training export applies the documented evidence, review, and partition checks.
 See [Enhancement](ENHANCEMENT.md), [Frame selection](SMART_FRAME_SELECTION.md),
 and [Training](TRAINING.md).
+
+New inference uses local llama.cpp. Dataset files and original CSV values are
+unchanged by the backend migration; see [runtime setup and migration status](LLAMA_CPP.md#migration-from-ollama).
 
 These derived outputs may contain original images, copied CSV rows, reviewer
 identifiers, and machine paths. Keep them local too. `outputs/` is ignored for
@@ -151,10 +185,25 @@ convenience, and raw data/media/export formats are ignored throughout the repo.
 Internal planning notes, research reports, work logs, and the source-derived
 inventory have been moved to private storage outside the repository. Public
 examples use placeholder paths; tests generate synthetic data in temporary
-directories. Required third-party font copyright notices remain intact.
+directories. Fonts are resolved from the local system and are not bundled.
 
 Before a commit, run `python3 scripts/check_repo_hygiene.py`; after staging,
 run `python3 scripts/check_repo_hygiene.py --staged`. CI runs the same current-tree
-check. It detects common private-file, dataset, email, credential, and local-path
-patterns without printing their values. It is a preventive check, not a guarantee
-of anonymization or a purge of earlier Git history. Never force-add ignored data.
+check. The ignore rules and checker exclude font binaries, model weights and
+checkpoints, medical and other source media, archives, credentials, local editor
+settings, dependency caches, and build outputs. Unrecognized binary files are
+also rejected unless their exact path is an approved media exception.
+
+JSON, HTML, and notebooks require an individually reviewed path in both
+`.gitignore` and the checker's `PUBLIC_ARTIFACTS` allowlist. The current exceptions
+are the enhancement schema and the review UI's HTML source. Keep generated
+records and reports under `outputs/` or outside the repository; renaming an
+export or placing it under `tests/` does not make it a public fixture. Tests
+should construct synthetic inputs in temporary directories. Source code,
+dependency lockfiles, and public documentation remain publishable.
+
+The checker reports common private-file, dataset, email, credential, and
+local-path patterns without printing their values. It checks tracked files even
+when ignore rules match them; `--staged` inspects the actual staged contents.
+These are preventive checks, not a guarantee of anonymization, licensing
+compliance, or removal from earlier Git history. Never force-add ignored data.

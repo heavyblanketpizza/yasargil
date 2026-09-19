@@ -11,13 +11,13 @@ import test_medgemma_review as fixtures
 from yasargil.contract import ContractError, sha256_file
 from yasargil.dataset_inspector import InspectorStore
 from yasargil.medgemma_surgery_review import SurgeryReviewConfig, run_review
-from yasargil.ollama import MEDGEMMA_MODEL, OllamaError
+from yasargil.llama_cpp import MEDGEMMA_MODEL, LlamaCppError
 
 
 read, write = fixtures.read, fixtures.write
 
 
-class JointOllama:
+class JointLlamaCpp:
     def __init__(self, *, deferred_ids=(), transform=None, transport_error=False):
         self.deferred_ids = set(deferred_ids)
         self.transform, self.transport_error = transform, transport_error
@@ -27,13 +27,17 @@ class JointOllama:
     def model_info(self, model):
         self.info_calls.append(model)
         return {"name": model, "digest": "sha256:" + "b" * 64, "quantization": "Q8_0",
-                "runtime_version": "0.test", "capabilities": ["vision"]}
+                "runtime_version": "0.test", "capabilities": ["vision"], "runtime": "llama.cpp",
+                "model_file": {"path": "/models/medgemma.gguf", "sha256": "a" * 64},
+                "projector_file": {"path": "/models/mmproj.gguf", "sha256": "b" * 64},
+                "runtime_binary": {"path": "/bin/llama-server", "sha256": "c" * 64, "libraries": []},
+                "binary_version": "0.test"}
 
     def chat_raw(self, request):
         self.requests.append(copy.deepcopy(request))
         context = json.loads(request["messages"][-1]["content"])
         drafts = {row["frame_id"]: row for row in context["qwen_annotations"]}
-        targets = request["format"]["properties"]["reviews"]["required"]
+        targets = request["response_format"]["json_schema"]["schema"]["properties"]["reviews"]["required"]
         judgments = {}
         for target in targets:
             # Reuse the existing valid per-target contract inside the joint envelope.
@@ -41,10 +45,12 @@ class JointOllama:
                 "target_frame_id": target, "qwen_annotation": drafts[target]})}]}
             judgments[target] = fixtures.review_answer(individual, needs_more=target in self.deferred_ids)
         envelope = {
-            "model": request["model"], "done": True, "done_reason": "stop",
-            "message": {"role": "assistant", "thinking": "JOINT_THINKING_RETAIN_EXACTLY",
+            "model": request["model"],
+            "choices": [{"index": 0, "finish_reason": "stop",
+            "message": {"role": "assistant", "diagnostic_detail": "JOINT_DIAGNOSTIC_RETAIN_EXACTLY",
                         "content": json.dumps({"reviews": judgments})},
-            "prompt_eval_count": 200, "eval_count": 160,
+            }],
+            "usage": {"prompt_tokens": 200, "completion_tokens": 160, "total_tokens": 360},
             "extra_runtime_metadata": {"preserve": ["whole-surgery", 123, True]},
         }
         transformed = self.transform(envelope) if self.transform else envelope
@@ -52,7 +58,7 @@ class JointOllama:
         self.responses.append(raw)
         self.last_response_bytes = raw
         if self.transport_error:
-            raise OllamaError("Scripted joint transport failure")
+            raise LlamaCppError("Scripted joint transport failure")
         return raw
 
 
@@ -77,7 +83,7 @@ class MedGemmaSurgeryReviewTests(unittest.TestCase):
 
     def test_one_joint_call_contains_each_selected_image_and_all_drafts_exactly_once(self):
         parent_bytes = {path: path.read_bytes() for path in self.annotation.rglob("*.json")}
-        client = JointOllama()
+        client = JointLlamaCpp()
         summary = self.run_pass(client)
         self.assertEqual(summary["status"], "completed")
         self.assertEqual(summary["review_unit"], "surgery")
@@ -87,22 +93,22 @@ class MedGemmaSurgeryReviewTests(unittest.TestCase):
         request = client.requests[0]
         self.assertEqual(request["model"], self.config.medgemma_model)
         self.assertFalse(request["stream"])
-        self.assertEqual(request["options"]["num_ctx"], 65536)
-        self.assertEqual(request["options"]["num_predict"], 16384)
-        self.assertEqual(request["options"]["seed"], 42)
+        self.assertEqual(request["n_ctx"], 65536)
+        self.assertEqual(request["max_tokens"], 16384)
+        self.assertEqual(request["seed"], 42)
         messages = request["messages"]
         self.assertEqual([m["role"] for m in messages], ["system"] + ["user"] * 5)
-        image_messages = [message for message in messages if message.get("images")]
+        image_messages = [message for message in messages if isinstance(message.get("content"), list)]
         self.assertEqual(len(image_messages), 4)
         by_id = {frame["frame_id"]: frame for frame in self.source["frames"]}
         for message, target in zip(image_messages, self.selected_ids):
-            locator = json.loads(message["content"][message["content"].index("{"):])
+            locator = json.loads(message["content"][0]["text"].split(": ", 1)[1])
             self.assertEqual(locator["frame_id"], target)
             self.assertEqual(locator["timestamp_ms"], by_id[target]["timestamp_ms"])
             self.assertEqual(locator["frame_index"], by_id[target]["frame_index"])
-            self.assertEqual(len(message["images"]), 1)
-            self.assertEqual(base64.b64decode(message["images"][0]), Path(by_id[target]["image_path"]).read_bytes())
-        schema = request["format"]["properties"]["reviews"]
+            self.assertEqual(sum(block["type"] == "image_url" for block in message["content"]), 1)
+            self.assertEqual(base64.b64decode(message["content"][1]["image_url"]["url"].split(",", 1)[1]), Path(by_id[target]["image_path"]).read_bytes())
+        schema = request["response_format"]["json_schema"]["schema"]["properties"]["reviews"]
         self.assertEqual(schema["required"], self.selected_ids)
         self.assertEqual(set(schema["properties"]), set(self.selected_ids))
         self.assertFalse(schema["additionalProperties"])
@@ -138,13 +144,13 @@ class MedGemmaSurgeryReviewTests(unittest.TestCase):
         self.assertEqual(parent_bytes, {path: path.read_bytes() for path in parent_bytes})
 
     def test_raw_joint_envelope_is_saved_once_and_every_review_points_to_that_call(self):
-        client = JointOllama()
+        client = JointLlamaCpp()
         self.run_pass(client)
         attempt = self.attempt()
         self.assertEqual((attempt / "response.json").read_bytes(), client.responses[0])
         self.assertEqual(len(list((self.output / "calls").rglob("response.json"))), 1)
         response = read(attempt / "response.json")
-        self.assertEqual(response["message"]["thinking"], "JOINT_THINKING_RETAIN_EXACTLY")
+        self.assertEqual(response["choices"][0]["message"]["diagnostic_detail"], "JOINT_DIAGNOSTIC_RETAIN_EXACTLY")
         self.assertEqual(response["extra_runtime_metadata"], {"preserve": ["whole-surgery", 123, True]})
         combined = read(attempt / "review.json")
         self.assertEqual(combined["schema_version"], "medgemma-surgery-review-v1")
@@ -156,7 +162,7 @@ class MedGemmaSurgeryReviewTests(unittest.TestCase):
         self.assertEqual(read(attempt / "receipt.json")["files"]["response.json"], sha256_file(attempt / "response.json"))
 
     def test_prepare_only_and_pause_make_no_model_calls(self):
-        client = JointOllama()
+        client = JointLlamaCpp()
         self.assertEqual(self.run_pass(client, prepare_only=True)["status"], "prepared")
         self.assertEqual(client.info_calls, [])
         self.assertEqual(client.requests, [])
@@ -179,7 +185,7 @@ class MedGemmaSurgeryReviewTests(unittest.TestCase):
         self.assertEqual(len(client.requests), 1)
 
     def test_inspector_shows_one_case_with_all_joint_reviews_and_shared_raw_artifacts(self):
-        client = JointOllama()
+        client = JointLlamaCpp()
         self.run_pass(client)
         store = InspectorStore(self.root, self.fixture.dataset)
         records = store.records()["records"]
@@ -198,22 +204,47 @@ class MedGemmaSurgeryReviewTests(unittest.TestCase):
             self.assertEqual(response.read_bytes(), client.responses[0])
 
     def test_completed_resume_neither_loads_nor_calls_medgemma(self):
-        self.run_pass(JointOllama())
+        self.run_pass(JointLlamaCpp())
         before = {path: path.read_bytes() for path in self.attempt().iterdir()}
-        client = JointOllama()
+        client = JointLlamaCpp()
         self.assertEqual(self.run_pass(client, resume=True)["status"], "completed")
         self.assertEqual(client.info_calls, [])
         self.assertEqual(client.requests, [])
         self.assertEqual(before, {path: path.read_bytes() for path in before})
 
+    def test_pre_migration_surgery_review_cannot_resume_with_llama_cpp(self):
+        self.run_pass(JointLlamaCpp(), prepare_only=True)
+        plan = read(self.output / "run.json")
+        plan.pop("runtime")
+        write(self.output / "run.json", plan)
+        write(self.output / "session.json", {"run_sha256": sha256_file(self.output / "run.json")})
+        client = JointLlamaCpp()
+        with self.assertRaisesRegex(ContractError, "predates the llama.cpp migration"):
+            self.run_pass(client, resume=True)
+        self.assertEqual(client.info_calls, [])
+        self.assertEqual(client.requests, [])
+
+    def test_invalid_completion_usage_cannot_be_recovered_as_an_accepted_response(self):
+        failed = JointLlamaCpp(transform=lambda envelope: {**envelope, "usage": {
+            **envelope["usage"], "completion_tokens": self.config.num_predict + 1}})
+        with self.assertRaisesRegex(ContractError, "completion usage"):
+            self.run_pass(failed)
+        self.assertEqual((self.attempt() / "response.json").read_bytes(), failed.responses[0])
+        self.assertFalse((self.attempt() / "receipt.json").exists())
+        resumed = JointLlamaCpp()
+        self.assertEqual(self.run_pass(resumed, resume=True)["status"], "completed")
+        self.assertEqual(len(resumed.requests), 1)
+        self.assertFalse((self.attempt() / "receipt.json").exists())
+        self.assertTrue((self.attempt(2) / "receipt.json").exists())
+
     def test_saved_raw_joint_response_recovers_after_crash_without_any_repeat_call(self):
-        client = JointOllama()
+        client = JointLlamaCpp()
         with patch("yasargil.medgemma_surgery_review._parse", side_effect=KeyboardInterrupt("After raw response save")):
             with self.assertRaises(KeyboardInterrupt):
                 self.run_pass(client)
         self.assertEqual((self.attempt() / "response.json").read_bytes(), client.responses[0])
         self.assertFalse((self.attempt() / "review.json").exists())
-        resumed = JointOllama()
+        resumed = JointLlamaCpp()
         self.assertEqual(self.run_pass(resumed, resume=True)["status"], "completed")
         self.assertEqual(resumed.info_calls, [])
         self.assertEqual(resumed.requests, [])
@@ -221,9 +252,9 @@ class MedGemmaSurgeryReviewTests(unittest.TestCase):
 
     def test_missing_extra_or_mismatched_target_ids_never_publish_partial_reviews(self):
         def change_output(envelope, change):
-            value = json.loads(envelope["message"]["content"])
+            value = json.loads(envelope["choices"][0]["message"]["content"])
             change(value["reviews"])
-            envelope["message"]["content"] = json.dumps(value)
+            envelope["choices"][0]["message"]["content"] = json.dumps(value)
             return envelope
         def missing(rows):
             rows.pop(self.selected_ids[-1])
@@ -234,8 +265,8 @@ class MedGemmaSurgeryReviewTests(unittest.TestCase):
         for index, change in enumerate((missing, extra, mismatch)):
             with self.subTest(change=change.__name__):
                 self.output = self.root / f"invalid-targets-{index}"
-                client = JointOllama(transform=lambda envelope: change_output(envelope, change))
-                with self.assertRaises((ContractError, OllamaError)):
+                client = JointLlamaCpp(transform=lambda envelope: change_output(envelope, change))
+                with self.assertRaises((ContractError, LlamaCppError)):
                     self.run_pass(client)
                 self.assertEqual(len(client.requests), 1)
                 self.assertEqual((self.attempt() / "response.json").read_bytes(), client.responses[0])
@@ -244,12 +275,12 @@ class MedGemmaSurgeryReviewTests(unittest.TestCase):
 
     def test_unknown_evidence_citation_rejects_the_entire_joint_response(self):
         def bad_citation(envelope):
-            value = json.loads(envelope["message"]["content"])
+            value = json.loads(envelope["choices"][0]["message"]["content"])
             value["reviews"][self.selected_ids[-1]]["corrections"][0]["evidence_frame_ids"] = ["not-supplied"]
-            envelope["message"]["content"] = json.dumps(value)
+            envelope["choices"][0]["message"]["content"] = json.dumps(value)
             return envelope
-        client = JointOllama(transform=bad_citation)
-        with self.assertRaises((ContractError, OllamaError)):
+        client = JointLlamaCpp(transform=bad_citation)
+        with self.assertRaises((ContractError, LlamaCppError)):
             self.run_pass(client)
         self.assertEqual(len(client.requests), 1)
         self.assertEqual(read(self.output / "reviews.json")["reviews"], [])
@@ -259,21 +290,21 @@ class MedGemmaSurgeryReviewTests(unittest.TestCase):
         for index, count in enumerate((None, 0, -1, True, self.config.num_ctx - self.config.num_predict + 1)):
             with self.subTest(count=count):
                 self.output = self.root / f"bad-budget-{index}"
-                client = JointOllama(transform=lambda envelope: {**envelope, "prompt_eval_count": count})
-                with self.assertRaises((ContractError, OllamaError)):
+                client = JointLlamaCpp(transform=lambda envelope: {**envelope, "usage": {**envelope["usage"], "prompt_tokens": count}})
+                with self.assertRaises((ContractError, LlamaCppError)):
                     self.run_pass(client)
                 self.assertEqual(len(client.requests), 1)
                 self.assertEqual((self.attempt() / "response.json").read_bytes(), client.responses[0])
                 self.assertFalse((self.attempt() / "review.json").exists())
 
     def test_malformed_unfinished_and_truncated_responses_have_no_per_frame_fallback(self):
-        transforms = (lambda _: b"{partial joint response", lambda value: {**value, "done": False},
-                      lambda value: {**value, "done_reason": "length"})
+        transforms = (lambda _: b"{partial joint response", lambda value: {**value, "choices": [{**value["choices"][0], "finish_reason": None}]},
+                      lambda value: {**value, "choices": [{**value["choices"][0], "finish_reason": "length"}]})
         for index, transform in enumerate(transforms):
             with self.subTest(index=index):
                 self.output = self.root / f"bad-response-{index}"
-                client = JointOllama(transform=transform)
-                with self.assertRaises((ContractError, OllamaError)):
+                client = JointLlamaCpp(transform=transform)
+                with self.assertRaises((ContractError, LlamaCppError)):
                     self.run_pass(client)
                 self.assertEqual(len(client.requests), 1)
                 self.assertEqual((self.attempt() / "response.json").read_bytes(), client.responses[0])
@@ -281,12 +312,12 @@ class MedGemmaSurgeryReviewTests(unittest.TestCase):
                 self.assertEqual(read(self.output / "reviews.json")["reviews"], [])
 
     def test_partial_transport_body_is_preserved_and_explicit_retry_is_one_new_joint_call(self):
-        failed = JointOllama(transform=lambda _: b"partial HTTP body", transport_error=True)
-        with self.assertRaises(OllamaError):
+        failed = JointLlamaCpp(transform=lambda _: b"partial HTTP body", transport_error=True)
+        with self.assertRaises(LlamaCppError):
             self.run_pass(failed)
         before = {path: path.read_bytes() for path in self.attempt().iterdir()}
         self.assertEqual((self.attempt() / "response.json").read_bytes(), b"partial HTTP body")
-        resumed = JointOllama()
+        resumed = JointLlamaCpp()
         self.assertEqual(self.run_pass(resumed, resume=True)["status"], "completed")
         self.assertEqual(len(resumed.requests), 1)
         self.assertEqual(before, {path: path.read_bytes() for path in before})
@@ -294,13 +325,13 @@ class MedGemmaSurgeryReviewTests(unittest.TestCase):
                          {"calls/surgery/attempt-0002"})
 
     def test_accepted_receipt_and_all_raw_artifacts_are_immutable_on_resume(self):
-        self.run_pass(JointOllama())
+        self.run_pass(JointLlamaCpp())
         for name in ("request.json", "response.json", "model.json", "review.json", "receipt.json"):
             with self.subTest(name=name):
                 path = self.attempt() / name
                 original = path.read_bytes()
                 path.write_bytes(original + b"\n")
-                resumed = JointOllama()
+                resumed = JointLlamaCpp()
                 with self.assertRaises(ContractError):
                     self.run_pass(resumed, resume=True)
                 self.assertEqual(resumed.info_calls, [])
@@ -308,7 +339,7 @@ class MedGemmaSurgeryReviewTests(unittest.TestCase):
                 path.write_bytes(original)
 
     def test_changed_completed_reviews_are_rejected_without_overwriting_them_or_calling_model(self):
-        self.run_pass(JointOllama())
+        self.run_pass(JointLlamaCpp())
         path = self.output / "reviews.json"
         changed = read(path)
         changed["reviews"][0]["medgemma_review"]["revised_annotation"]["visible_observation"] = (
@@ -316,7 +347,7 @@ class MedGemmaSurgeryReviewTests(unittest.TestCase):
         write(path, changed)
         before = path.read_bytes()
         raw_before = {item: item.read_bytes() for item in self.attempt().iterdir()}
-        resumed = JointOllama()
+        resumed = JointLlamaCpp()
         with self.assertRaises(ContractError):
             self.run_pass(resumed, resume=True)
         self.assertEqual(path.read_bytes(), before, "A rejected publication must remain available for inspection")
@@ -325,11 +356,11 @@ class MedGemmaSurgeryReviewTests(unittest.TestCase):
         self.assertEqual(resumed.requests, [])
 
     def test_invalid_accepted_receipt_does_not_erase_published_reviews(self):
-        self.run_pass(JointOllama())
+        self.run_pass(JointLlamaCpp())
         published = (self.output / "reviews.json").read_bytes()
         receipt = self.attempt() / "receipt.json"
         receipt.write_bytes(receipt.read_bytes() + b"\n")
-        resumed = JointOllama()
+        resumed = JointLlamaCpp()
         with self.assertRaises(ContractError):
             self.run_pass(resumed, resume=True)
         self.assertEqual((self.output / "reviews.json").read_bytes(), published)
@@ -337,7 +368,7 @@ class MedGemmaSurgeryReviewTests(unittest.TestCase):
         self.assertEqual(resumed.requests, [])
 
     def test_evidence_request_is_deferred_without_new_model_or_image_calls(self):
-        client = JointOllama(deferred_ids=self.selected_ids[:1])
+        client = JointLlamaCpp(deferred_ids=self.selected_ids[:1])
         with patch("yasargil.frame_annotation.LocalVideoRuntime", side_effect=AssertionError("No Qwen followup")):
             summary = self.run_pass(client)
         self.assertEqual(summary["status"], "completed_with_deferred_evidence")

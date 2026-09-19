@@ -314,6 +314,19 @@ class MedGemmaPairTests(unittest.TestCase):
         self.assertEqual(self.runner.calls, [])
         self.assertEqual(self.verifier.calls, [])
 
+    def test_pre_migration_pair_cannot_resume_with_llama_cpp(self):
+        self.run_controller(prepare_only=True)
+        plan = read(self.output / "run.json")
+        plan.pop("runtime")
+        _write(self.output / "run.json", plan)
+        state = read(self.output / "state.json")
+        state["plan_sha256"] = sha256_file(self.output / "run.json")
+        _write(self.output / "state.json", state)
+        with self.assertRaisesRegex(ContractError, "predates the llama.cpp migration"):
+            self.run_controller(resume=True)
+        self.assertEqual(self.runner.calls, [])
+        self.assertEqual(self.verifier.calls, [])
+
     def test_partial_review_preparation_is_preserved_before_retry(self):
         self.run_controller(prepare_only=True)
         partial = self.output / CASES[0]

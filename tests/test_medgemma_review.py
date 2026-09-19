@@ -18,7 +18,7 @@ from yasargil.frame_annotation import AnnotationConfig, run_annotation
 from yasargil.medgemma_review import (
     ReviewConfig, request_review_pause, review_status, run_review,
 )
-from yasargil.ollama import OllamaError
+from yasargil.llama_cpp import LlamaCppError
 from yasargil.smart_selection import SelectionConfig, review_loop
 from yasargil.video_source import prepare_video_source
 
@@ -48,7 +48,7 @@ def review_answer(request, *, needs_more=False):
     }
 
 
-class FakeOllama:
+class FakeLlamaCpp:
     def __init__(self, *, deferred_ids=(), transform=None, transport_error=False):
         self.deferred_ids, self.transform = set(deferred_ids), transform
         self.transport_error = transport_error
@@ -58,16 +58,22 @@ class FakeOllama:
     def model_info(self, model):
         self.info_calls.append(model)
         return {"name": model, "digest": "sha256:" + "a" * 64, "quantization": "Q8_0",
-                "runtime_version": "0.test", "capabilities": ["vision"]}
+                "runtime_version": "0.test", "capabilities": ["vision"], "runtime": "llama.cpp",
+                "model_file": {"path": "/models/medgemma.gguf", "sha256": "a" * 64},
+                "projector_file": {"path": "/models/mmproj.gguf", "sha256": "b" * 64},
+                "runtime_binary": {"path": "/bin/llama-server", "sha256": "c" * 64, "libraries": []},
+                "binary_version": "0.test"}
 
     def chat_raw(self, request):
         self.requests.append(copy.deepcopy(request))
         target = json.loads(request["messages"][-1]["content"])["target_frame_id"]
         envelope = {
-            "model": request["model"], "done": True, "done_reason": "stop",
-            "message": {"role": "assistant", "thinking": "MODEL_THINKING_PRESERVE_VERBATIM",
+            "model": request["model"],
+            "choices": [{"index": 0, "finish_reason": "stop",
+            "message": {"role": "assistant", "diagnostic_detail": "MODEL_DIAGNOSTIC_PRESERVE_VERBATIM",
                         "content": json.dumps(review_answer(request, needs_more=target in self.deferred_ids))},
-            "prompt_eval_count": 100, "eval_count": 60,
+            }],
+            "usage": {"prompt_tokens": 100, "completion_tokens": 60, "total_tokens": 160},
             "extra_runtime_metadata": {"preserve": [1, "raw", True]},
         }
         transformed = self.transform(envelope) if self.transform else envelope
@@ -75,7 +81,7 @@ class FakeOllama:
         self.responses.append(raw)
         self.last_response_bytes = raw
         if self.transport_error:
-            raise OllamaError("Scripted transport validation failure")
+            raise LlamaCppError("Scripted transport validation failure")
         return raw
 
 
@@ -128,7 +134,7 @@ class MedGemmaReviewTests(unittest.TestCase):
 
     def test_one_fresh_review_per_target_contains_exact_ordered_pixels_and_source_labels(self):
         frozen_parent = {path: path.read_bytes() for path in self.annotation.rglob("*.json")}
-        client = FakeOllama()
+        client = FakeLlamaCpp()
         summary = self.run_pass(client)
         self.assertEqual(summary["status"], "completed")
         self.assertEqual(summary["reviewed_frame_count"], len(self.selected_ids))
@@ -139,16 +145,16 @@ class MedGemmaReviewTests(unittest.TestCase):
             self.assertEqual(packet["target_frame_id"], target_id)
             messages = request["messages"]
             self.assertEqual([m["role"] for m in messages], ["system"] + ["user"] * (len(packet["frames"]) + 1))
-            self.assertEqual(request["format"]["properties"]["target_frame_id"]["enum"], [target_id])
-            self.assertEqual(request["options"]["num_ctx"], self.config.num_ctx)
+            self.assertEqual(request["response_format"]["json_schema"]["schema"]["properties"]["target_frame_id"]["enum"], [target_id])
+            self.assertEqual(request["n_ctx"], self.config.num_ctx)
             self.assertFalse(request["stream"])
             frame_indices = []
             for message, frame in zip(messages[1:-1], packet["frames"]):
-                locator = json.loads(message["content"].removeprefix("Evidence image: "))
+                locator = json.loads(message["content"][0]["text"].removeprefix("Evidence image: "))
                 self.assertEqual(locator["frame_id"], frame["frame_id"])
                 self.assertEqual(locator["evidence_roles"], frame["evidence_roles"])
-                self.assertEqual(len(message["images"]), 1)
-                self.assertEqual(base64.b64decode(message["images"][0]), Path(frame["image_path"]).read_bytes())
+                self.assertEqual(sum(block["type"] == "image_url" for block in message["content"]), 1)
+                self.assertEqual(base64.b64decode(message["content"][1]["image_url"]["url"].split(",", 1)[1]), Path(frame["image_path"]).read_bytes())
                 frame_indices.append(locator["frame_index"])
             self.assertEqual(frame_indices, sorted(frame_indices))
             target_index = self.ids.index(target_id)
@@ -171,14 +177,14 @@ class MedGemmaReviewTests(unittest.TestCase):
         self.assertEqual(frozen_parent, {path: path.read_bytes() for path in frozen_parent})
 
     def test_raw_response_envelope_thinking_and_runtime_fields_are_preserved_exactly(self):
-        client = FakeOllama()
+        client = FakeLlamaCpp()
         self.run_pass(client)
         reviews = read(self.output / "reviews.json")["reviews"]
         for row, raw in zip(reviews, client.responses):
             attempt = self.output / row["call_directory"]
             self.assertEqual((attempt / "response.json").read_bytes(), raw)
             envelope = read(attempt / "response.json")
-            self.assertEqual(envelope["message"]["thinking"], "MODEL_THINKING_PRESERVE_VERBATIM")
+            self.assertEqual(envelope["choices"][0]["message"]["diagnostic_detail"], "MODEL_DIAGNOSTIC_PRESERVE_VERBATIM")
             self.assertEqual(envelope["extra_runtime_metadata"], {"preserve": [1, "raw", True]})
             self.assertTrue(row["human_review_required"])
             self.assertFalse(row["training_eligible"])
@@ -187,7 +193,7 @@ class MedGemmaReviewTests(unittest.TestCase):
             self.assertEqual(receipt["files"]["response.json"], sha256_file(attempt / "response.json"))
 
     def test_needs_more_evidence_is_deferred_while_other_key_frames_continue(self):
-        client = FakeOllama(deferred_ids=self.selected_ids[:1])
+        client = FakeLlamaCpp(deferred_ids=self.selected_ids[:1])
         with patch("yasargil.frame_annotation.LocalVideoRuntime", side_effect=AssertionError("Qwen must not run")):
             summary = self.run_pass(client)
         self.assertEqual(summary["status"], "completed_with_deferred_evidence")
@@ -203,11 +209,11 @@ class MedGemmaReviewTests(unittest.TestCase):
         self.assertEqual(row["status"], "deferred_not_dispatched")
         self.assertEqual(row["target_frame_id"], self.selected_ids[0])
         raw_response = read(self.output / row["response_path"])
-        self.assertEqual(row["evidence_requests"], json.loads(raw_response["message"]["content"])["evidence_requests"])
+        self.assertEqual(row["evidence_requests"], json.loads(raw_response["choices"][0]["message"]["content"])["evidence_requests"])
         self.assertEqual((self.output / row["response_path"]).read_bytes(), client.responses[0])
 
     def test_prepare_only_freezes_evidence_without_model_info_or_inference(self):
-        client = FakeOllama()
+        client = FakeLlamaCpp()
         summary = self.run_pass(client, prepare_only=True)
         self.assertEqual(summary["status"], "prepared")
         self.assertEqual(client.info_calls, [])
@@ -218,9 +224,9 @@ class MedGemmaReviewTests(unittest.TestCase):
         self.assertEqual(self.run_pass(client, resume=True)["status"], "completed")
 
     def test_completed_resume_validates_without_loading_or_calling_medgemma(self):
-        self.run_pass(FakeOllama())
+        self.run_pass(FakeLlamaCpp())
         originals = {path: path.read_bytes() for path in (self.output / "calls").rglob("*.json")}
-        resumed = FakeOllama()
+        resumed = FakeLlamaCpp()
         summary = self.run_pass(resumed, resume=True)
         self.assertEqual(summary["status"], "completed")
         self.assertEqual(resumed.info_calls, [])
@@ -228,7 +234,7 @@ class MedGemmaReviewTests(unittest.TestCase):
         self.assertEqual(originals, {path: path.read_bytes() for path in originals})
 
     def test_interruption_after_raw_save_recovers_without_repeating_that_frame(self):
-        interrupted = FakeOllama()
+        interrupted = FakeLlamaCpp()
         with patch("yasargil.medgemma_review._parse", side_effect=KeyboardInterrupt("Stopped after raw save")):
             with self.assertRaises(KeyboardInterrupt):
                 self.run_pass(interrupted)
@@ -236,7 +242,7 @@ class MedGemmaReviewTests(unittest.TestCase):
         self.assertEqual((attempt / "response.json").read_bytes(), interrupted.responses[0])
         self.assertFalse((attempt / "review.json").exists())
         self.assertEqual(review_status(self.output)["status"], "interrupted")
-        resumed = FakeOllama()
+        resumed = FakeLlamaCpp()
         self.assertEqual(self.run_pass(resumed, resume=True)["status"], "completed")
         self.assertEqual(len(resumed.requests), 3)
         self.assertEqual(json.loads(resumed.requests[0]["messages"][-1]["content"])["target_frame_id"], self.selected_ids[1])
@@ -246,23 +252,23 @@ class MedGemmaReviewTests(unittest.TestCase):
 
     def test_malformed_unfinished_truncated_and_tool_responses_are_saved_without_retry(self):
         def unfinished(value):
-            value["done"] = False
+            value["choices"][0]["finish_reason"] = None
             return value
         def truncated(value):
-            value["done_reason"] = "length"
+            value["choices"][0]["finish_reason"] = "length"
             return value
         def tool_call(value):
-            value["message"]["tool_calls"] = [{"function": {"name": "qwen_search", "arguments": {}}}]
+            value["choices"][0]["message"]["tool_calls"] = [{"function": {"name": "qwen_search", "arguments": {}}}]
             return value
         def invalid_annotation(value):
-            value["message"]["content"] = '{"target_frame_id": "invented"}'
+            value["choices"][0]["message"]["content"] = '{"target_frame_id": "invented"}'
             return value
         for index, transform in enumerate((lambda _: b"{malformed runtime response", unfinished,
                                             truncated, tool_call, invalid_annotation)):
             with self.subTest(case=index):
                 self.output = self.root / f"bad-review-{index}"
-                client = FakeOllama(transform=transform)
-                with self.assertRaises((ContractError, OllamaError)):
+                client = FakeLlamaCpp(transform=transform)
+                with self.assertRaises((ContractError, LlamaCppError)):
                     self.run_pass(client)
                 attempt = self.output / "calls/frame-0000/attempt-0001"
                 self.assertEqual((attempt / "response.json").read_bytes(), client.responses[0])
@@ -273,20 +279,20 @@ class MedGemmaReviewTests(unittest.TestCase):
                 self.assertEqual(review_status(self.output)["status"], "failed")
 
     def test_transport_rejection_retains_its_body(self):
-        client = FakeOllama(transform=lambda _: b"partial HTTP body", transport_error=True)
-        with self.assertRaises(OllamaError):
+        client = FakeLlamaCpp(transform=lambda _: b"partial HTTP body", transport_error=True)
+        with self.assertRaises(LlamaCppError):
             self.run_pass(client)
         attempt = self.output / "calls/frame-0000/attempt-0001"
         self.assertEqual((attempt / "response.json").read_bytes(), b"partial HTTP body")
         self.assertEqual(len(client.requests), 1)
 
     def test_explicit_resume_creates_new_attempt_and_preserves_prior_failure(self):
-        failed = FakeOllama(transform=lambda _: b"{bad json")
-        with self.assertRaises(OllamaError):
+        failed = FakeLlamaCpp(transform=lambda _: b"{bad json")
+        with self.assertRaises(LlamaCppError):
             self.run_pass(failed)
         prior = self.output / "calls/frame-0000/attempt-0001"
         originals = {path: path.read_bytes() for path in prior.iterdir()}
-        resumed = FakeOllama()
+        resumed = FakeLlamaCpp()
         self.assertEqual(self.run_pass(resumed, resume=True)["status"], "completed")
         self.assertEqual(len(resumed.requests), 4)
         self.assertEqual(originals, {path: path.read_bytes() for path in originals})
@@ -296,26 +302,65 @@ class MedGemmaReviewTests(unittest.TestCase):
                          "calls/frame-0000/attempt-0002")
 
     def test_changed_plan_evidence_or_frozen_qwen_inputs_fail_before_inference(self):
-        self.run_pass(FakeOllama(), prepare_only=True)
+        self.run_pass(FakeLlamaCpp(), prepare_only=True)
         for relative in ("run.json", "evidence/frame-0000.json", "qwen/source/source.json",
                          "qwen/annotations.json", "qwen/round-00/response.json"):
             path = self.output / relative
             original = path.read_bytes()
             path.write_bytes(original + b"\n")
-            client = FakeOllama()
+            client = FakeLlamaCpp()
             with self.subTest(path=relative), self.assertRaises(ContractError):
                 self.run_pass(client, resume=True)
             self.assertEqual(client.info_calls, [])
             self.assertEqual(client.requests, [])
             path.write_bytes(original)
 
+    def test_pre_migration_review_cannot_resume_with_llama_cpp(self):
+        self.run_pass(FakeLlamaCpp(), prepare_only=True)
+        plan = read(self.output / "run.json")
+        plan.pop("runtime")
+        write(self.output / "run.json", plan)
+        write(self.output / "session.json", {"run_sha256": sha256_file(self.output / "run.json")})
+        client = FakeLlamaCpp()
+        with self.assertRaisesRegex(ContractError, "predates the llama.cpp migration"):
+            self.run_pass(client, resume=True)
+        self.assertEqual(client.info_calls, [])
+        self.assertEqual(client.requests, [])
+
+    def test_resume_pins_projector_and_runtime_binary_as_well_as_model(self):
+        failed = FakeLlamaCpp(transform=lambda _: b"{partial reply")
+        with self.assertRaises(LlamaCppError):
+            self.run_pass(failed)
+        for key in ("model_file", "projector_file", "runtime_binary"):
+            with self.subTest(changed=key):
+                client = FakeLlamaCpp()
+                metadata = client.model_info(self.config.medgemma_model)
+                metadata[key]["sha256"] = "d" * 64
+                with patch.object(client, "model_info", return_value=metadata):
+                    with self.assertRaisesRegex(ContractError, "Pinned MedGemma model or runtime changed"):
+                        self.run_pass(client, resume=True)
+                self.assertEqual(client.requests, [])
+
+    def test_invalid_completion_usage_cannot_be_recovered_as_an_accepted_response(self):
+        failed = FakeLlamaCpp(transform=lambda envelope: {**envelope, "usage": {
+            **envelope["usage"], "completion_tokens": self.config.num_predict + 1}})
+        with self.assertRaisesRegex(ContractError, "completion usage"):
+            self.run_pass(failed)
+        attempt = self.output / "calls/frame-0000/attempt-0001"
+        self.assertEqual((attempt / "response.json").read_bytes(), failed.responses[0])
+        self.assertFalse((attempt / "receipt.json").exists())
+        resumed = FakeLlamaCpp()
+        self.assertEqual(self.run_pass(resumed, resume=True)["status"], "completed")
+        self.assertEqual(len(resumed.requests), len(self.selected_ids))
+        self.assertFalse((attempt / "receipt.json").exists())
+
     def test_changed_source_or_decoded_image_fails_before_inference(self):
-        self.run_pass(FakeOllama(), prepare_only=True)
+        self.run_pass(FakeLlamaCpp(), prepare_only=True)
         for key in ("source_path", "image_path"):
             path = Path(self.source["frames"][0][key])
             original = path.read_bytes()
             Image.new("RGB", (48, 32), "pink").save(path)
-            client = FakeOllama()
+            client = FakeLlamaCpp()
             with self.subTest(path=key), self.assertRaises(ContractError):
                 self.run_pass(client, resume=True)
             self.assertEqual(client.info_calls, [])
@@ -323,13 +368,13 @@ class MedGemmaReviewTests(unittest.TestCase):
             path.write_bytes(original)
 
     def test_completed_resume_rejects_changes_to_accepted_response_request_and_review(self):
-        self.run_pass(FakeOllama())
+        self.run_pass(FakeLlamaCpp())
         attempt = self.output / "calls/frame-0000/attempt-0001"
         for name in ("response.json", "request.json", "review.json", "model.json"):
             path = attempt / name
             original = path.read_bytes()
             path.write_bytes(original + b"\n")
-            client = FakeOllama()
+            client = FakeLlamaCpp()
             with self.subTest(name=name), self.assertRaises(ContractError):
                 self.run_pass(client, resume=True)
             self.assertEqual(client.info_calls, [])
@@ -343,7 +388,7 @@ class MedGemmaReviewTests(unittest.TestCase):
                 self.assertTrue(request_review_pause(self.output)["pause_requested"])
                 active_states.append(review_status(self.output))
             return envelope
-        client = FakeOllama(transform=pause_first)
+        client = FakeLlamaCpp(transform=pause_first)
         summary = self.run_pass(client)
         self.assertEqual(summary["status"], "paused")
         self.assertEqual(summary["reviewed_frame_count"], 1)
@@ -352,16 +397,16 @@ class MedGemmaReviewTests(unittest.TestCase):
         self.assertTrue(active_states[0]["pause_requested"])
         self.assertFalse(review_status(self.output)["writer_active"])
         self.assertTrue((self.output / "calls/frame-0000/attempt-0001/response.json").exists())
-        paused_again = self.run_pass(FakeOllama(), resume=True, should_stop=lambda: True)
+        paused_again = self.run_pass(FakeLlamaCpp(), resume=True, should_stop=lambda: True)
         self.assertEqual(paused_again["status"], "paused")
         self.assertEqual(paused_again["reviewed_frame_count"], 1)
-        resumed = FakeOllama()
+        resumed = FakeLlamaCpp()
         self.assertEqual(self.run_pass(resumed, resume=True)["status"], "completed")
         self.assertEqual(len(resumed.requests), 3)
         self.assertFalse(review_status(self.output)["pause_requested"])
 
     def test_stop_callback_can_pause_without_any_model_call(self):
-        client = FakeOllama()
+        client = FakeLlamaCpp()
         self.assertEqual(self.run_pass(client, should_stop=lambda: True)["status"], "paused")
         self.assertEqual(client.info_calls, [])
         self.assertEqual(client.requests, [])
@@ -381,7 +426,7 @@ class MedGemmaReviewTests(unittest.TestCase):
                 draft = read(annotation_path)
                 draft["annotations"][0]["visible_observation"] = "Invented later surgical finding."
                 write(annotation_path, draft)
-            client = FakeOllama()
+            client = FakeLlamaCpp()
             with self.subTest(mutation=mutation), self.assertRaises(ContractError):
                 self.run_pass(client)
             self.assertEqual(client.info_calls, [])
@@ -399,7 +444,7 @@ class MedGemmaReviewTests(unittest.TestCase):
                                                   max_tokens=2048, max_evidence_span_ms=2000),
                                  runtime_factory=qwen_fixtures.RuntimeFactory(conflicting), progress=lambda _: None)
         self.assertEqual(summary["status"], "context_conflict")
-        client = FakeOllama()
+        client = FakeLlamaCpp()
         self.run_pass(client)
         for request in client.requests:
             self.assertEqual(json.loads(request["messages"][-1]["content"])["qwen_context_check"], "conflict")

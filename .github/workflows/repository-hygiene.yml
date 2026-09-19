@@ -14,3 +14,5 @@ jobs:
           persist-credentials: false
       - name: Check repository files
         run: python3 scripts/check_repo_hygiene.py
+      - name: Test repository hygiene rules
+        run: python3 -m unittest discover -s tests -p test_repo_hygiene.py

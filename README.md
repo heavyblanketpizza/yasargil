@@ -1,14 +1,47 @@
 # Yasargil
 
+![Yasargil workflow: surgery, frame selection, annotation, human review, and training, illustrated with stock photos and colorful scientific icons.](docs/assets/yasargil-banner.webp)
+
 [Apache License 2.0](LICENSE) · Copyright 2026 Yasargil contributors.
 
-Yasargil creates **traceable, reviewable multimodal training conversations** from surgical datasets. Qwen proposes observations and questions from selected images; MedGemma independently inspects the evidence, reviews the proposals, and requests targeted reinspection when information is missing. Each call, evidence reference and proposed answer is retained for human review.
+Yasargil creates **traceable, reviewable drafts of multimodal training conversations** from surgical datasets. Qwen proposes observations and questions from selected images; MedGemma reviews the supplied visual evidence and proposals and records requests for additional evidence. Each call, evidence reference and proposed answer is retained for human review.
 
 The first source is **SOSpine**, microscope images of simulated spinal durotomy repair on cadavers. The immediate product is an enhanced research dataset and an Unsloth training interface. Surgeon assistance is the downstream research goal; dataset generation alone does not establish readiness for live use.
 
+SOSpine's original annotations are **human-labeled tool points and computed bounding boxes**, stored as labels and coordinates in CSV tables. **Qwen writes the new natural-language observations, contextual claims, and uncertainties; MedGemma reviews those drafts.** Preserving an exact source row means retaining its original values and location, not certifying that its label is correct. See [source annotations and generated content](docs/DATA_SOURCES.md#what-yasargil-does-with-the-data).
+
 **The dataset is not included in this repository. Download SOSpine yourself from the [official Figshare project](https://figshare.com/projects/Simulated_Outcomes_for_Durotomy_Repair_in_Minimally_Invasive_Spine_Surgery_SOSpine_/142508).** Follow [Data sources and local setup](docs/DATA_SOURCES.md) for attribution, required files, checksums, directory layout, and what Yasargil generates. Keep source data and derived outputs outside Git.
 
-[Enhancement workflow](docs/ENHANCEMENT.md) describes the implemented architecture, full-sequence batches and durable pause/resume. This repository contains code, schemas, synthetic tests, and user guides; internal planning notes, research archives, work logs, and copied dataset records are kept in private storage outside it.
+The [complete-video annotation path](docs/FRAME_ANNOTATION.md) and the separate [bounded enhancement loop](docs/ENHANCEMENT.md) use different evidence inputs, described below. This repository contains code, schemas, synthetic tests, and user guides; internal planning notes, research archives, work logs, and copied dataset records are kept in private storage outside it.
+
+## Research status and known limitations
+
+**The annotation and review pipeline is experimental and needs further work.**
+Early local runs have exposed three issues:
+
+- **Unreliable temporal citations.** Generated timestamps have not consistently
+  matched the supplied video, and some evidence intervals have been invalid or
+  outside its duration. Decode-coverage and frame-manifest checks do not establish
+  that a model describes the correct event at the cited time. Reconstruction,
+  llama.cpp video preprocessing, and model temporal grounding need investigation;
+  an upstream llama.cpp defect has not been established.
+- **Expensive whole-video requests.** Qwen receives the complete sampled video
+  and selected stills together, with fresh full-video requests across stages.
+  Decoding, visual-token use, and latency make this inefficient in the current
+  experiments. Improving ingestion and comparing bounded-context alternatives
+  are priorities for the next revision.
+- **Limited MedGemma corrections.** Initial reviews have made few substantive
+  changes to Qwen's drafts. The current MedGemma request contains all selected
+  stills and Qwen annotations together, rather than a native video. Long joint
+  context, missing supporting views, and anchoring on the draft are possible
+  contributors; the cause is unconfirmed. Revising this protocol and measuring
+  correction quality are priorities. Agreement between models does not establish
+  correctness or a benefit from review.
+
+Outputs remain unvalidated research drafts. Timestamp accuracy, clinical claims,
+and any training benefit require separate evaluation and expert review. See the
+[video-input limits](docs/LLAMA_CPP.md#integrity-and-validation-limits) and
+[current MedGemma protocol](docs/MEDGEMMA_FRAME_REVIEW.md).
 
 ## Inspect the enhanced dataset
 
@@ -23,7 +56,7 @@ See the [inspector guide](docs/DATASET_INSPECTOR.md).
 
 `select-video-frames` uses DINO embeddings to propose diverse frames, then asks local Qwen through llama.cpp to review the **complete native video and the candidate stills together in one call**. Qwen only keeps or drops the sampled candidates; it cannot request or add frames. The default set contains 24 candidates, including eight protected timeline anchors. Every candidate carries its timestamp basis, source filename, exact frame index, and file hashes.
 
-The workflow verifies complete frame coverage and rejects inputs that the pinned runtime would resample or truncate. SOSpine JPEG sequences use reconstructed nominal time: duration is image count divided by reconstruction fps, so 288 images at 1 fps last 4:48. Selection and annotation share this media timeline and ignore recorded repair/outcomes-CSV durations for timing. These offsets locate images accurately within the reconstruction; original-procedure elapsed time and end-to-end coverage remain unverified. Original videos retain their verified PTS timeline. See the [setup, commands, provenance and limits](docs/SMART_FRAME_SELECTION.md) and [local llama.cpp setup](docs/LLAMA_CPP.md).
+The workflow verifies complete frame coverage and rejects inputs that the pinned runtime would resample or truncate. SOSpine JPEG sequences use reconstructed nominal time: duration is image count divided by reconstruction fps, so 288 images at 1 fps last 4:48. Selection and annotation share this media timeline and ignore recorded repair/outcomes-CSV durations for timing. Manifest offsets locate images within the reconstruction; they do not validate model-generated event times or citations. Original-procedure elapsed time and end-to-end coverage remain unverified. Original videos retain their verified PTS timeline. See the [setup, commands, provenance and limits](docs/SMART_FRAME_SELECTION.md) and [local llama.cpp setup](docs/LLAMA_CPP.md).
 
 ```bash
 uv sync --extra selection
@@ -44,21 +77,23 @@ context and a six-hour request timeout by default. Status, pause, and resume
 commands preserve completed work.
 
 After selection, [the annotation pass](docs/FRAME_ANNOTATION.md) starts a fresh
-Qwen session with the complete video and the frozen final stills. It produces
+Qwen session with the complete video and the frozen final stills, without the
+original source-label CSV rows. Qwen writes new
 per-frame visible observations, separate video-context claims with timestamped
 source evidence, and uncertainty for human review. These drafts remain ineligible
 for training until the separate review requirements are satisfied.
 
-The next [MedGemma review stage](docs/MEDGEMMA_FRAME_REVIEW.md) assesses each Qwen
-annotation with its key frame, before/after source frames, cited supporting
-images, and matching original dataset labels. It preserves corrections and the
-complete response. Requests for additional evidence are saved for later without
-dispatching Qwen or TimeLens2:
+The current [MedGemma review stage](docs/MEDGEMMA_FRAME_REVIEW.md) assesses all
+selected stills from one surgery together with their Qwen drafts and matching
+original dataset labels in one request. It does not automatically add neighboring
+frames or Qwen-cited supporting images. It preserves proposed corrections and
+the complete response. Requests for additional evidence are saved for later
+without dispatching Qwen or TimeLens2:
 
 ```sh
-.venv/bin/python -m yasargil review-frame-annotations \
+.venv/bin/python -m yasargil.medgemma_surgery_review \
   --annotation-run outputs/frame_annotations/S6A3 \
-  --output-dir outputs/medgemma_reviews/S6A3
+  --output-dir outputs/medgemma_surgery_reviews/S6A3
 ```
 
 The separate [gap experiment](docs/GAP_EXPERIMENT.md) retains evidence retrieval
@@ -70,10 +105,16 @@ check before the audits start. It preserves the scores, reasons, exact omissions
 retrieval receipts, and provisional recovery measures in a visual comparison
 report, with pause/resume support.
 
-## Enhancement workflow
+## Bounded enhancement workflow
+
+`enhance-sospine` is a separate path from complete-video selection and annotation.
+It supplies sampled JPEGs and their original tool-label/coordinate CSV rows to
+both models. Qwen generates new observations and questions from this evidence;
+MedGemma's initial observation is independent of Qwen's text but sees the same
+source labels.
 
 ```text
-Original SOSpine JPEGs + exact visual annotation rows
+Original SOSpine JPEGs + tool labels and coordinates from CSVs
                       ↓
 Bounded frame window; initial uniform sample
                       ↓
@@ -92,13 +133,13 @@ Actual human review + surgeon-disjoint partition gates
 Reviewed multimodal messages → PIL image loading → Unsloth SFT
 ```
 
-The enhancement workflow uses **ordered images through local Ollama**, with release-frame indices and unavailable timestamps stated explicitly. Qwen performs the targeted local reinspection; a TimeLens2 adapter is not implemented. Case outcomes remain archive metadata and are excluded from model requests.
+Qwen and MedGemma generation uses **local llama.cpp**. The enhancement workflow sends ordered images, with release-frame indices and unavailable timestamps stated explicitly. Qwen performs the targeted local reinspection; a TimeLens2 adapter is not implemented. Case outcomes remain archive metadata and are excluded from model requests.
 
 The archive preserves how an example was made. The learner receives only the selected conversation: user text and image blocks followed by reviewed assistant text. This is conversational supervised fine-tuning with vision inputs. Generated explanations are proposed content, not recovered surgeon thoughts or an outcome-based reward.
 
 ## Setup
 
-The repository selects Python 3.12 through `.python-version` and locks core dependencies in `uv.lock`; package metadata supports Python 3.10 or newer. Model weights, PyTorch and Unsloth are outside the core environment. Run an Ollama service separately on this computer.
+The repository selects Python 3.12 through `.python-version` and locks core dependencies in `uv.lock`; package metadata supports Python 3.10 or newer. Model weights, the pinned llama.cpp runtime, PyTorch and Unsloth are outside the core environment. Install the runtime and matching GGUF model/projector pairs using the [local setup guide](docs/LLAMA_CPP.md). Each inference workflow starts and stops its own local server.
 
 ```bash
 uv sync --frozen
@@ -106,11 +147,11 @@ uv run yasargil --help
 uv run yasargil models
 ```
 
-Defaults are `qwen3.8:27b-q4_K_M` and `medgemma:27b`; install compatible models in your own environment. Each run checks the current tags, digests, quantization and vision capability and saves model metadata. To explicitly download or update the requested models:
+Defaults are `qwen3.8-27b` and `medgemma-27b`. `models` inspects the local GGUF files, matching vision projectors and pinned runtime and reports their hashes; it does not download weights. Run from the repository root, or pass `--project-root /path/to/yasargil` to the image-workflow commands. Use `--timeout` to set their request deadline.
 
-```bash
-uv run yasargil models --pull
-```
+**llama.cpp is the active Qwen/MedGemma inference backend. Both local model/projector pairs are installed, and Qwen and MedGemma have passed structured image smoke calls.** We chose llama.cpp for Qwen's native video input alongside selected stills, direct control over decoding and context budgets, and one owned local runtime for both models. The full-video paths already used it; the remaining enhancement and MedGemma paths now use it too. The change does not establish faster inference or better annotations. See [migration status and reasons](docs/LLAMA_CPP.md#migration-from-ollama).
+
+Keep old Ollama runs as historical evidence; they cannot resume under llama.cpp. Start a new output directory for this backend and retain model files independently of the Ollama cache. There is no backend switch or fallback.
 
 Preview the plan without writes or model calls:
 
@@ -132,7 +173,7 @@ uv run yasargil enhance-sospine \
   --output-dir outputs/example
 ```
 
-The default one search round permits at most five logical stages: three initial calls plus Qwen search and MedGemma revision. A run may stop earlier. At most 32 distinct frames are selected per window; this example permits eight. Source files remain unchanged and outputs must be outside the source dataset. There are no implicit model pulls or automatic retries; explicit resumption can repeat an unfinished stage.
+The default one search round permits at most five logical stages: three initial calls plus Qwen search and MedGemma revision. A run may stop earlier. At most 32 distinct frames are selected per window; this example permits eight. Source files remain unchanged and outputs must be outside the source dataset. There are no model downloads or automatic retries; explicit resumption can repeat an unfinished stage.
 
 A completed run writes an archive, plan, exact requests/responses, model metadata, completion status, an unblinded call audit, a separate review packet with blank worksheet, and a training-format preview when there is projected dialogue. A failed run retains available call artifacts and records failure details. **Pipeline completion does not mark the archive reviewed or training eligible.** See [artifact details](docs/ENHANCEMENT.md).
 
@@ -165,7 +206,7 @@ Pause lets the current model call finish and saves its result before stopping. W
 uv run yasargil resume-enhancement --output-dir outputs/sospine-best-worst
 ```
 
-The first `Ctrl+C` also requests this pause; a second interrupts immediately, so the unfinished call must run again on resume. Status reads saved progress without loading the source or contacting Ollama. Resume loads saved settings, verifies source/model/configuration compatibility, and reuses completed call outputs. It saves application artifacts, **not a model KV cache**; source files and the same installed model artifacts must remain available. A foreground resume stays attached to that terminal. A separately launched background worker uses the same status/pause commands.
+The first `Ctrl+C` also requests this pause; a second interrupts immediately, so the unfinished call must run again on resume. Status reads saved progress without loading the source or starting a model server. Resume loads saved settings, verifies source/model/configuration compatibility, and reuses completed call outputs. It saves application artifacts, **not a model KV cache**; source files and the same installed model artifacts must remain available. A foreground resume stays attached to that terminal. A separately launched background worker uses the same status/pause commands.
 
 The same status/pause/resume commands accept a single-window output directory such as `outputs/example`. Alternatively, repeat its original `enhance-sospine` command with `--resume`; its configuration must match. A changed model, prompt, source or configuration needs a new job rather than silently mixing results. See [resume safeguards and artifacts](docs/ENHANCEMENT.md).
 
@@ -204,6 +245,7 @@ Keep three evaluations separate: whether an added claim is correct, what the sim
 | [Complete-video frame selection](docs/SMART_FRAME_SELECTION.md) | One native full-video review of fixed embedding candidates, keep/drop decisions and provenance. |
 | [SOSpine selection batch](docs/SELECTION_BATCH.md) | All released sequences, alternating simulated leak outcomes, status and pause/resume. |
 | [Frame annotation](docs/FRAME_ANNOTATION.md) | Fresh full-video annotation, visible/contextual claim separation, timestamp evidence and human review. |
+| [Local llama.cpp setup](docs/LLAMA_CPP.md) | Runtime/model installation, Ollama migration status and reasons, input protocols and validation limits. |
 | [Enhancement workflow](docs/ENHANCEMENT.md) | Model responsibilities, budgets, commands and artifacts. |
 | [Dataset contract](docs/DATASET_CONTRACT.md) | Evidence archive, temporal exposure, provenance and export gates. |
 | [Review and evaluation](docs/REVIEW_AND_EVALUATION.md) | Human review and comparative studies. |
@@ -231,6 +273,24 @@ Third-party materials retain their own terms:
 - **Model weights and external runtimes:** obtain these separately under their
   upstream terms, including the [Health AI Developer Foundations terms](https://developers.google.com/health-ai-developer-foundations/terms)
   for MedGemma. Yasargil's license does not replace those terms.
+- **README banner:** the stock photographs and icons retain their
+  [Magnific stock-content terms](https://www.magnific.com/ai/docs/licenses-attribution)
+  and are excluded from the Apache license. The images illustrate the workflow;
+  they are not SOSpine frames or screenshots of Yasargil.
+
+<details>
+<summary>Banner image and icon credits</summary>
+
+Artwork sourced through Magnific:
+
+- Surgery: [microsurgeon photograph](https://www.magnific.com/premium-photo/doctor-microsurgeon-works-operating-room-glasses-microscope-with-lenses-neurosurgical-ope_24363828.htm) by velimirisaevich.
+- Selection: [video-editing workstation](https://www.magnific.com/free-photo/empty-office-workspace-with-dual-monitors-displaying-video-editing-timeline_417839803.htm) by DC Studio.
+- Annotation: [network visualization](https://www.magnific.com/free-photo/3d-render-low-poly-plexus-design-with-shallow-depth-field_23592892.htm) by kjpargeter.
+- Review: [medical image review](https://www.magnific.com/free-photo/medic-expert-analyzing-ct-scan-result-examine-organs-condition_410109349.htm) by DC Studio.
+- Training: [AI systems photograph](https://www.magnific.com/free-photo/it-admin-does-ai-systems-checkup_190323443.htm) by DC Studio.
+- Icons: [scientific icon collection](https://www.magnific.com/free-vector/flat-color-scientific-icons-set-biotechnology-genetic-engineering-nanotechnology-isolated-vector-illustration_4411606.htm) by macrovector_official.
+
+</details>
 
 Yasargil is research software. Its outputs have not been validated for clinical
 decision-making or live surgical guidance. This describes the project's

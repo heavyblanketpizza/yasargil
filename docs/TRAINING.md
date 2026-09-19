@@ -10,7 +10,13 @@ The [Qwen–MedGemma loop](ENHANCEMENT.md) produces pending drafts and format pr
 
 Install the locked core project with `uv sync --frozen` and use `uv run yasargil` for source import, enhancement, validation and export. `.python-version` selects Python 3.12. The core lock does not install or validate PyTorch, Unsloth, a GPU stack or model weights; choose and freeze the training environment separately using the compatibility constraints below.
 
-Use the intended HF training checkpoint and matching processor revision. An Ollama/GGUF package is an inference artifact; do not pass its tag or GGUF file to this trainer. Configure model loading, PEFT/trainable layers, image resolution, frame count and device placement before constructing the trainer. The helper does not choose or download a checkpoint.
+Use the intended HF training checkpoint and matching processor revision. A llama.cpp GGUF model/projector pair is an inference artifact; do not pass its alias or GGUF file to this trainer. Configure model loading, PEFT/trainable layers, image resolution, frame count and device placement before constructing the trainer. The helper does not choose or download a checkpoint.
+
+The [Ollama-to-llama.cpp migration](LLAMA_CPP.md#migration-from-ollama) changes
+local inference, not this Hugging Face/Unsloth training interface. Historical
+Ollama enhancement archives keep their original provenance and can be checked by the
+read-only legacy verifier; new inference runs use llama.cpp. Both require the
+same applicable human-review and export gates.
 
 The currently researched Unsloth dependency envelope is:
 

@@ -10,7 +10,7 @@ import test_contract as source_fixture
 
 from yasargil import enhancement_prompts as prompts
 from yasargil.contract import ContractError, sha256_file, validate_record
-from yasargil.teacher import (ADAPTER, ENVELOPE_BUILDER_VERSION, EVENT_QUESTION,
+from yasargil.teacher import (ADAPTER, LEGACY_ADAPTER, ENVELOPE_BUILDER_VERSION, EVENT_QUESTION,
                               build_request, canonical_bytes, frame_caption, parse_response,
                               validate_teacher_runs)
 
@@ -24,10 +24,11 @@ class TeacherTests(unittest.TestCase):
         self.root, self.artifacts = self.source.root, self.source.artifacts
         self.metadata = {"model_name": "fixture-vlm:1", "model_digest": "sha256:" + "1" * 64,
                          "quantization": "Q4_K_M", "runtime_version": "0.fixture",
-                         "tags_response": {"models": [{"name": "fixture-vlm:1", "model": "fixture-vlm:1",
-                             "digest": "sha256:" + "1" * 64, "details": {"quantization_level": "Q4_K_M"}}]},
-                         "show_response": {"details": {"quantization_level": "Q4_K_M"}, "capabilities": ["vision"]},
-                         "version_response": {"version": "0.fixture"}}
+                         "runtime": "llama.cpp", "binary_version": "0.fixture", "capabilities": ["vision"],
+                         "model_file": {"path": "/fixture/model.gguf", "sha256": "1" * 64},
+                         "projector_file": {"path": "/fixture/mmproj.gguf", "sha256": "2" * 64},
+                         "runtime_binary": {"path": "/fixture/llama-server", "sha256": "3" * 64, "libraries": []}}
+
         self._put("model-info", canonical_bytes(self.metadata), "reference_document")
 
     def _put(self, aid, raw, role):
@@ -49,15 +50,16 @@ class TeacherTests(unittest.TestCase):
                 "searches": [], "disagreements": []}
 
     def _response(self, run, output):
-        return {"model": run["model_name"], "created_at": "2026-09-11T00:00:00Z", "done": True,
-                "done_reason": "stop", "message": {"role": "assistant", "content": json.dumps(output)},
-                "total_duration": 123, "eval_count": 32}
+        return {"model": run["model_name"], "choices": [{"index": 0, "finish_reason": "stop",
+                "message": {"role": "assistant", "content": json.dumps(output)}}],
+                "usage": {"prompt_tokens": 123, "completion_tokens": 32, "total_tokens": 155}}
+
 
     def _run(self, rid="run1", stage="propose", parents=(), frame_ids=None, output=None, cutoff=3):
         frame_ids = frame_ids or ["f000001", "f000002", "f000003"]
         run = {"run_id": rid, "model_name": self.metadata["model_name"],
                "model_digest": self.metadata["model_digest"], "quantization": self.metadata["quantization"],
-               "runtime": "ollama", "runtime_version": self.metadata["runtime_version"],
+               "runtime": "llama.cpp", "runtime_version": self.metadata["runtime_version"],
                "request_asset_id": f"{rid}-request", "response_asset_id": f"{rid}-response",
                "prompt_version": prompts.PROMPT_VERSION, "input_mode": "causal_prefix",
                "input_frame_ids": frame_ids,
@@ -68,8 +70,8 @@ class TeacherTests(unittest.TestCase):
                "generation_parameters": {"adapter": ADAPTER, "envelope_builder_version": ENVELOPE_BUILDER_VERSION,
                    "stage": stage, "parent_run_ids": list(parents), "start_frame_index": 1,
                    "cutoff_frame_index": cutoff, "stage_question": prompts.stage_question(stage),
-                   "options": {"temperature": 0, "num_predict": 512}, "model_metadata_asset_id": "model-info",
-                   "think": False, "keep_alive": 0}}
+                   "options": {"temperature": 0, "num_predict": 512, "num_ctx": 8192, "seed": 42},
+                   "model_metadata_asset_id": "model-info"}}
         self.record["generation_runs"].append(run)
         raw = build_request(self.record, run, dataset_root=self.root, artifact_root=self.artifacts)
         self._put(run["request_asset_id"], raw, "teacher_request")
@@ -122,13 +124,13 @@ class TeacherTests(unittest.TestCase):
         raw = (self.artifacts / f"{run['request_asset_id']}.json").read_bytes()
         request = json.loads(raw)
         self.assertEqual(raw, canonical_bytes(request))
-        self.assertEqual(request["format"], prompts.response_schema())
-        payload = json.loads(request["messages"][1]["content"])
+        self.assertEqual(request["response_format"]["json_schema"]["schema"], prompts.response_schema())
+        payload = json.loads(request["messages"][1]["content"][0]["text"])
         self.assertNotIn("case_outcomes", payload)
         self.assertEqual(len(payload["frames"]), 3)
         self.assertEqual(payload["original_annotations"][0]["raw_value"], self.source.raw_points[0])
         expected = (self.root / "frames/S1A2/S1A2_frame_00000001.jpeg").read_bytes()
-        self.assertEqual(base64.b64decode(request["messages"][1]["images"][0], validate=True), expected)
+        self.assertEqual(base64.b64decode(request["messages"][1]["content"][1]["image_url"]["url"].split(",", 1)[1], validate=True), expected)
         self.assertEqual(self._verify(), {"run1"})
 
     def test_reviewed_fabricated_teacher_record_can_pass_training_gate(self):
@@ -187,7 +189,7 @@ class TeacherTests(unittest.TestCase):
 
     def test_swapped_image_bytes_fail_even_when_request_hash_updated(self):
         run = self._run()
-        self._rewrite_request(run, lambda r: r["messages"][1]["images"].reverse())
+        self._rewrite_request(run, lambda r: r["messages"][1]["content"].reverse())
         with self.assertRaisesRegex(ContractError, "request bytes"):
             self._verify()
 
@@ -197,15 +199,15 @@ class TeacherTests(unittest.TestCase):
                 run = self._run(rid=f"run-{key}")
                 if key == "outcome":
                     def mutate(request):
-                        payload = json.loads(request["messages"][1]["content"])
+                        payload = json.loads(request["messages"][1]["content"][0]["text"])
                         payload["outcome"] = True
-                        request["messages"][1]["content"] = canonical_bytes(payload).decode()
+                        request["messages"][1]["content"][0]["text"] = canonical_bytes(payload).decode()
                 elif key == "message":
                     def mutate(request):
                         request["messages"].insert(1, {"role": "assistant", "content": "future answer"})
                 else:
                     def mutate(request):
-                        request["options"]["temperature"] = 1
+                        request["temperature"] = 1
                 self._rewrite_request(run, mutate)
                 with self.assertRaisesRegex(ContractError, "request bytes"):
                     self._verify()
@@ -240,8 +242,8 @@ class TeacherTests(unittest.TestCase):
         child = self._run("run2", "review", ["run1"])
         self.assertEqual(self._verify(), {"run1", "run2"})
         request = json.loads((self.artifacts / f"{child['request_asset_id']}.json").read_bytes())
-        self.assertEqual(json.loads(request["messages"][1]["content"])["parent_outputs"][0]["output"], self._output())
-        self._rewrite_response(parent, lambda r: r["message"].update(content=json.dumps(self._output() | {"disagreements": ["Changed parent output"]})))
+        self.assertEqual(json.loads(request["messages"][1]["content"][0]["text"])["parent_outputs"][0]["output"], self._output())
+        self._rewrite_response(parent, lambda r: r["choices"][0]["message"].update(content=json.dumps(self._output() | {"disagreements": ["Changed parent output"]})))
         with self.assertRaisesRegex(ContractError, "request bytes"):
             self._verify()
 
@@ -285,18 +287,18 @@ class TeacherTests(unittest.TestCase):
             with self.subTest(key=key):
                 value = copy.deepcopy(self.metadata)
                 if key == "digest":
-                    value["tags_response"]["models"][0]["digest"] = "sha256:" + "2" * 64
+                    value["model_file"]["sha256"] = "2" * 64
                 elif key == "quantization":
-                    value["show_response"]["details"]["quantization_level"] = "F16"
+                    value["quantization"] = "F16"
                 else:
-                    value["version_response"]["version"] = "different"
+                    value["binary_version"] = "different"
                 self._put("model-info", canonical_bytes(value), "reference_document")
                 with self.assertRaisesRegex(ContractError, "digest|quantization|runtime"):
                     self._verify()
 
     def test_text_only_model_receipt_is_rejected(self):
         self._run()
-        self.metadata["show_response"]["capabilities"] = ["completion"]
+        self.metadata["capabilities"] = ["completion"]
         self._put("model-info", canonical_bytes(self.metadata), "reference_document")
         with self.assertRaisesRegex(ContractError, "vision capability"):
             self._verify()
@@ -304,13 +306,24 @@ class TeacherTests(unittest.TestCase):
     def test_failed_truncated_wrong_model_and_hidden_reasoning_rejected(self):
         run = self._run()
         original = self._response(run, self._output())
-        variants = [original | {"done": False}, original | {"done_reason": "length"},
-                    original | {"model": "other"}, original | {"error": "failure"},
-                    original | {"message": original["message"] | {"thinking": "secret reasoning"}}]
+        variants = [original | {"choices": []},
+                    original | {"choices": [original["choices"][0] | {"finish_reason": "length"}]},
+                    original | {"model": "other"}, original | {"error": "failure"}, original | {"truncated": True},
+                    original | {"choices": [original["choices"][0] | {
+                        "message": original["choices"][0]["message"] | {"reasoning_content": "secret reasoning"}}]}]
         for response in variants:
             with self.subTest(response=response):
                 with self.assertRaises(ContractError):
                     parse_response(canonical_bytes(response), run)
+
+    def test_missing_or_overbudget_token_usage_cannot_verify(self):
+        run = self._run()
+        original = self._response(run, self._output())
+        for usage in (None, [], {}, {"prompt_tokens": 8192, "completion_tokens": 32},
+                      {"prompt_tokens": 100, "completion_tokens": 513},
+                      {"prompt_tokens": True, "completion_tokens": 32}):
+            with self.subTest(usage=usage), self.assertRaisesRegex(ContractError, "token usage"):
+                parse_response(canonical_bytes(original | {"usage": usage}), run)
 
     def test_duplicate_json_keys_are_rejected(self):
         run = self._run()
@@ -321,7 +334,7 @@ class TeacherTests(unittest.TestCase):
         run = self._run()
         output = self._output()
         output["events"][0]["evidence_frame_ids"] = ["future-frame"]
-        self._rewrite_response(run, lambda r: r["message"].update(content=json.dumps(output)))
+        self._rewrite_response(run, lambda r: r["choices"][0]["message"].update(content=json.dumps(output)))
         with self.assertRaisesRegex(ContractError, "structured output"):
             self._verify()
 
@@ -371,6 +384,56 @@ class TeacherTests(unittest.TestCase):
         self.record["training_view"]["turn_links"][0]["student_frame_ids"] = ["f000001"]
         with self.assertRaisesRegex(ContractError, "ancestor frame context"):
             self._verify()
+
+    def test_legacy_archive_verification_is_retained_without_new_legacy_requests(self):
+        run = self._run()
+        request = json.loads((self.artifacts / f"{run['request_asset_id']}.json").read_bytes())
+        blocks = request["messages"][1]["content"]
+        payload = json.loads(blocks[0]["text"])
+        payload["adapter"] = LEGACY_ADAPTER
+        run["runtime"] = "ollama"
+        params = run["generation_parameters"]
+        params.update(adapter=LEGACY_ADAPTER, think=False, keep_alive=0)
+        metadata = {key: self.metadata[key] for key in
+                    ("model_name", "model_digest", "quantization", "runtime_version")}
+        metadata.update(tags_response={"models": [{"name": run["model_name"], "digest": run["model_digest"],
+                        "details": {"quantization_level": run["quantization"]}}]},
+                        show_response={"details": {"quantization_level": run["quantization"]}, "capabilities": ["vision"]},
+                        version_response={"version": run["runtime_version"]})
+        legacy_request = {"model": run["model_name"], "stream": False, "format": prompts.response_schema(),
+                          "options": params["options"], "think": False, "keep_alive": 0,
+                          "messages": [request["messages"][0], {"role": "user",
+                              "content": canonical_bytes(payload).decode(),
+                              "images": [b["image_url"]["url"].split(",", 1)[1] for b in blocks[1:]]}]}
+        legacy_response = {"model": run["model_name"], "done": True, "done_reason": "stop",
+                           "message": {"role": "assistant", "content": json.dumps(self._output())}}
+        self._put("model-info", canonical_bytes(metadata), "reference_document")
+        self._put(run["request_asset_id"], canonical_bytes(legacy_request), "teacher_request")
+        self._put(run["response_asset_id"], canonical_bytes(legacy_response), "teacher_response")
+        self.assertEqual(self._verify(), {run["run_id"]})
+        with self.assertRaisesRegex(ContractError, "legacy Ollama archives are read-only"):
+            build_request(self.record, run, dataset_root=self.root, artifact_root=self.artifacts)
+
+    def test_llama_cpp_receipts_require_projector_and_runtime_hashes(self):
+        self._run()
+        for field in ("model_file", "projector_file", "runtime_binary"):
+            with self.subTest(field=field):
+                value = copy.deepcopy(self.metadata)
+                value[field]["sha256"] = "invalid"
+                self._put("model-info", canonical_bytes(value), "reference_document")
+                with self.assertRaisesRegex(ContractError, "fingerprint"):
+                    self._verify()
+
+    def test_runtime_libraries_need_complete_unique_fingerprints(self):
+        self._run()
+        library = {"path": "/fixture/libllama.dylib", "sha256": "4" * 64}
+        for libraries in (None, {}, [{}], [library | {"sha256": "invalid"}], [library, library]):
+            with self.subTest(libraries=libraries):
+                metadata = copy.deepcopy(self.metadata)
+                metadata["runtime_binary"]["libraries"] = libraries
+                self._put("model-info", canonical_bytes(metadata), "reference_document")
+                with self.assertRaisesRegex(ContractError, "fingerprint"):
+                    self._verify()
 
     def test_unsupported_adapter_and_no_byte_roots_grant_no_training_gate(self):
         run = self._run()

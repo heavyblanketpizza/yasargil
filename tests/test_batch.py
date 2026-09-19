@@ -58,7 +58,7 @@ class BatchTests(unittest.TestCase):
         result = self.run_batch(second, resume=True)
         self.assertEqual(result["status"], "completed")
         self.assertEqual(len(second.requests), 5)
-        self.assertEqual(json.loads(second.requests[0]["messages"][1]["content"])["stage"], "independent_observe")
+        self.assertEqual(json.loads(second.requests[0]["messages"][1]["content"][0]["text"])["stage"], "independent_observe")
 
     def test_external_pause_marker_and_saved_settings_cli_resume(self):
         client = ScriptedClient(search=False)
@@ -73,7 +73,7 @@ class BatchTests(unittest.TestCase):
         self.assertEqual(self.run_batch(client)["status"], "paused")
         self.assertTrue(enhancement_status(self.dest)["pause_requested"])
         second = ScriptedClient(search=False)
-        with patch("yasargil.__main__.OllamaClient", return_value=second), contextlib.redirect_stdout(io.StringIO()):
+        with patch("yasargil.__main__.LlamaCppClient", return_value=second), contextlib.redirect_stdout(io.StringIO()):
             main(["resume-enhancement", "--output-dir", str(self.dest)])
         self.assertEqual(len(second.requests), 5)
         self.assertFalse((self.dest / "PAUSE").exists())
@@ -111,6 +111,16 @@ class BatchTests(unittest.TestCase):
         (self.root / "documentation/readme.txt").write_text("Changed source")
         with self.assertRaisesRegex(ContractError, "source bytes changed"):
             self.run_batch(ScriptedClient(search=False), resume=True)
+
+    def test_legacy_batch_cannot_resume_with_llama_cpp(self):
+        self.run_batch(ScriptedClient(search=False), pause_requested=lambda: True)
+        saved = json.loads((self.dest / "batch.json").read_text())
+        saved["plan"]["transport"] = "ollama_ordered_images"
+        (self.dest / "batch.json").write_text(json.dumps(saved))
+        client = ScriptedClient()
+        with self.assertRaisesRegex(ContractError, "legacy Ollama jobs are read-only"):
+            self.run_batch(client, resume=True)
+        self.assertFalse(client.requests)
 
     def test_new_or_removed_frames_in_unprocessed_window_reject_resume(self):
         self.run_batch(ScriptedClient(search=False), pause_requested=lambda: True)
@@ -183,7 +193,7 @@ class BatchTests(unittest.TestCase):
             atomic_json(self.dest / "checkpoint.json", {**checkpoint, "status": status}, overwrite=True)
             self.assertEqual(enhancement_status(self.dest)["status"], "interrupted")
         second = ScriptedClient(search=False)
-        with patch("yasargil.__main__.OllamaClient", return_value=second), contextlib.redirect_stdout(io.StringIO()):
+        with patch("yasargil.__main__.LlamaCppClient", return_value=second), contextlib.redirect_stdout(io.StringIO()):
             main(["resume-enhancement", "--output-dir", str(self.dest)])
         self.assertEqual(len(second.requests), 2)
         self.assertEqual(enhancement_status(self.dest)["status"], "completed")

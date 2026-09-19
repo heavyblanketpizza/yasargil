@@ -1,23 +1,24 @@
-# Local Qwen video inference with llama.cpp
+# Local inference with llama.cpp
 
-This setup runs Qwen3.8-27B on the Mac's GPU and asks it about a complete local
-video in one request. It is a first video-inference experiment; it does not yet
-replace Yasargil's existing Ollama enhancement pipeline or generate per-frame
-training captions.
+llama.cpp is Yasargil's only Qwen/MedGemma generation backend. Qwen's native-video selection
+and annotation paths, ordered-image enhancement, and MedGemma review all use
+the pinned local runtime. Each workflow owns its local server and stops it
+when its inference work finishes; an always-on service is unnecessary.
 
-For the implemented embedding selection and contextual keep/drop workflow, use
-[complete-video frame selection](SMART_FRAME_SELECTION.md). It requires every
-source frame, validates native decoding and timestamps, and keeps the video in
-each follow-up request. The standalone experiment described below samples at its
-configured FPS and remains separate.
+[Complete-video frame selection](SMART_FRAME_SELECTION.md) requires every
+source frame, validates native decoding and timestamps, and preserves the
+complete video in its requests. [Enhancement](ENHANCEMENT.md) and
+[MedGemma review](MEDGEMMA_FRAME_REVIEW.md) send ordered still images using the
+OpenAI-compatible chat endpoint with image data URLs and a JSON-schema
+`response_format`. These are different evidence protocols on the same backend.
+The standalone video experiment below samples at its configured FPS.
 
-## Runtime setup
+## Runtime and model setup
 
-The helper expects a separately installed, pinned llama.cpp runtime in
-`.runtime/llama.cpp/b10809/` and matching local model files at the paths below.
-Runtime binaries, models, and datasets are not included in the repository.
-It does not require an always-on service like Ollama: the helper starts a local server for each run and stops it
-afterward.
+Install the pinned llama.cpp runtime in `.runtime/llama.cpp/b10809/` and matching
+model/projector pairs at the paths below. Runtime binaries, models and datasets
+are excluded from the repository. Obtain them separately under their upstream
+terms and verify publisher checksums.
 
 | Component | Location / version |
 | --- | --- |
@@ -26,18 +27,114 @@ afterward.
 | Binary version | `0.4.0-dev`, build `10809`, commit `5266f24da` |
 | Release archive | `.runtime/llama-b10809-bin-macos-arm64.tar.gz` |
 | Video decoder | Homebrew FFmpeg `9.0.1` (`9.0.1_1` package), `/opt/homebrew/bin/ffmpeg` |
-| Model | `.runtime/models/qwen3.8-27b-q4_k_m.gguf` |
-| Vision projector | `.runtime/models/qwen3.8-27b-mmproj-bf16.gguf` |
+| Qwen alias | `qwen3.8-27b` |
+| Qwen model | `.runtime/models/qwen3.8-27b-q4_k_m.gguf` |
+| Qwen vision projector | `.runtime/models/qwen3.8-27b-mmproj-bf16.gguf` |
+| MedGemma alias | `medgemma-27b` |
+| MedGemma model | `.runtime/models/medgemma-27b-q4_k_m.gguf` |
+| MedGemma vision projector | `.runtime/models/medgemma-27b-mmproj-f16.gguf` |
 
 The archive comes from the [official llama.cpp release](https://github.com/ggml-org/llama.cpp/releases/tag/b10809).
 The [stable release pointer](https://github.com/ggml-org/llama.cpp/releases/tag/v0.4.0)
-explains why a stable release can report a binary version ending in `-dev`.
+explains why this pinned release can report a binary version ending in `-dev`.
 
-Use a matching model and vision projector. The reference pair identifies itself
-as `Qwen3.8 27B 0814`; the model uses `qwen35` architecture and Q4_K_M compression,
-and the BF16 projector supplies the vision encoder. Existing compatible Ollama
-blobs can be linked at the expected paths to avoid copying large model files.
-If using symlinks, retain their backing files while using this setup.
+Use a matching model and vision projector. The Qwen reference pair identifies
+itself as `Qwen3.8 27B 0814`; the model uses `qwen35` architecture and Q4_K_M
+compression, and the BF16 projector supplies the vision encoder. MedGemma needs
+its own matching model and F16 projector. A model file alone is insufficient
+for an image workflow.
+
+Inspect the installation from the project directory:
+
+```sh
+uv run yasargil models
+```
+
+For the ordered-image commands, `--project-root /path/to/yasargil` locates
+`.runtime/` when running elsewhere; `--timeout` sets the request deadline.
+`models` inspects local model/projector metadata and hashes and the runtime
+identity. It does not download weights or demonstrate successful image inference.
+Exact requests, complete response envelopes, model and projector hashes, and
+runtime identity are retained with each run.
+
+MedGemma uses the pinned runtime's built-in Gemma formatter with
+`--no-jinja --chat-template gemma`. This avoids a Jinja grammar-prefill failure
+while preserving image markers and JSON-schema constraints. Qwen retains its
+model-provided Jinja template. These launch settings are part of runtime identity.
+
+## Migration from Ollama
+
+**Status as of 19 September 2026:** llama.cpp is the active Qwen/MedGemma
+inference backend, and both independent model/projector pairs are installed
+locally. Qwen and MedGemma have each passed an ordered-image smoke call with a
+structured response. A complete three-call enhancement run also passed using
+synthetic source data, covering Qwen proposal, independent MedGemma observation,
+and MedGemma review with retained artifacts. Qwen native-video runs have also
+executed locally. These checks establish working input and response paths; they do not establish
+completion or quality of a production dataset enhancement/review run on the
+migrated backend.
+
+The transition happened in stages: complete-video selection, annotation and
+gap experiments already used llama.cpp. The remaining Ollama image workflows,
+bounded enhancement and MedGemma review, now use it too. DINO frame embeddings
+and Hugging Face/Unsloth training keep their separate execution paths.
+
+The reasons for the change are:
+
+- **Native video input for Qwen.** Selection and annotation can send an
+  `input_video` item and selected stills in the same request. The former Ollama
+  integration in this project sent image lists; it did not exercise this native
+  video path. This is a distinction between Yasargil's implemented adapters,
+  not a claim about every capability of Ollama.
+- **Direct decoding and context controls.** The pinned runtime exposes video
+  sampling/timestamp settings, visual-token budgets, context capacity, and
+  decoder logs. The complete-video workflows compare decoded frames with the
+  source inventory and reject truncation; the runtime disables automatic fitting
+  and context shifting. These controls help audit what was supplied, without
+  proving that the model understood it or cited the correct event time.
+- **One local inference backend.** Ordered-image enhancement and MedGemma review
+  now use the same runtime family as Qwen video. The application owns server
+  startup/shutdown, uses explicit GGUF model/projector files, and retains requests,
+  responses and runtime identities for inspection.
+
+This migration has no established speed or annotation-quality advantage from a
+controlled comparison. Whole-video processing remains expensive, generated
+temporal citations have been unreliable, and early MedGemma reviews have made
+few substantive corrections. See the [research status](../README.md#research-status-and-known-limitations).
+Those protocol and quality investigations remain ongoing after the backend change.
+
+There is no Ollama client, backend selector or automatic fallback in the active
+inference path. The former `--ollama-url` and `models --pull` options are removed.
+Keep model/projector files independently under `.runtime/models/`; do not rely
+on symlinks into an Ollama-managed blob cache if that installation will be removed.
+A compatible existing GGUF pair can be copied into these paths without downloading
+the same weights again. A combined Ollama Gemma3 file is not a ready-to-use pair:
+it requires an explicit, verified conversion of metadata and embedded vision
+tensors. Confirm model inspection and image inference before removing any
+separate runtime or cache installation. The migration does not uninstall the
+Ollama application or delete its cache.
+
+The local migration stores Qwen as independent model/projector files. The
+installed combined MedGemma GGUF is split with a retained conversion helper at
+`.runtime/migrations/medgemma-split/split_medgemma.py`. That directory also retains
+the upstream source used to verify the mapping. The receipt at
+`.runtime/models/medgemma-split-provenance.json` records the original file hash,
+helper/source hashes, tensor mapping, metadata changes and every output tensor
+hash. The converter preserves language weights and tokenizer bytes, renames the
+vision tensors and promotes only the vision patch/position embeddings from F16
+to F32 without losing values. Existing normalization shifts are preserved.
+It validates both outputs before publishing their final filenames and leaves
+the source blob unchanged. These local migration artifacts are excluded from Git;
+other installations can supply a compatible upstream model/projector pair.
+
+Historical Ollama requests, responses and archives retain their original bytes
+and provenance. They are not converted or relabeled as llama.cpp calls, and an
+Ollama run cannot resume under the new backend. Start a new output directory.
+The ordered-image teacher adapter is now `llama-cpp-evidence-v1`; it binds the
+OpenAI-compatible request and response to the local model, projector and runtime.
+A read-only verifier remains for original `ollama-evidence-v1` archives. Verified
+historical records can still pass export only after all ordinary human-review,
+eligibility and partition gates. Backend migration grants no review approval.
 
 ## Run a video
 

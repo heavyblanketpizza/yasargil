@@ -1,4 +1,4 @@
-"""Byte-bound provenance for the bounded Ollama evidence adapter.
+"""Byte-bound provenance for bounded llama.cpp evidence and historical archives.
 
 This verifies retained requests, responses and declared local model metadata. It
 does not attest a remote server's execution or establish clinical correctness.
@@ -11,18 +11,22 @@ import csv
 import hashlib
 import io
 import json
+import re
 from pathlib import Path
 
 from .contract import ContractError, require, resolve_asset
 
-ADAPTER = "ollama-evidence-v1"
+ADAPTER = "llama-cpp-evidence-v1"
+LEGACY_ADAPTER = "ollama-evidence-v1"
 ENVELOPE_BUILDER_VERSION = "1"
 EVENT_QUESTION = "Describe the visible events and uncertainties in the supplied ordered frames."
 _PARAMETERS = {
     "adapter", "envelope_builder_version", "stage", "parent_run_ids",
     "start_frame_index", "cutoff_frame_index", "stage_question", "options",
-    "model_metadata_asset_id", "think", "keep_alive",
+    "model_metadata_asset_id",
 }
+
+_LEGACY_PARAMETERS = _PARAMETERS | {"think", "keep_alive"}
 
 
 def frame_caption(frame):
@@ -35,7 +39,7 @@ def frame_caption(frame):
 
 
 def canonical_bytes(value):
-    """The exact UTF-8 encoding sent to Ollama and retained as teacher_request."""
+    """The exact UTF-8 encoding sent to llama.cpp and retained as teacher_request."""
     try:
         return json.dumps(value, sort_keys=True, ensure_ascii=False,
                           separators=(",", ":"), allow_nan=False).encode("utf-8")
@@ -61,18 +65,33 @@ def _json(raw):
 
 
 def parse_response(raw_bytes, run):
-    """Parse a complete successful Ollama envelope and its JSON content."""
+    """Parse complete llama.cpp responses or retained legacy Ollama receipts."""
     response = _json(raw_bytes)
-    require(isinstance(response, dict), "Teacher response must be an Ollama object")
-    require("error" not in response and response.get("done") is True,
+    require(isinstance(response, dict) and "error" not in response,
             "Teacher response is incomplete or failed")
-    require(response.get("done_reason") == "stop",
-            "Teacher response stopped before completion")
     require(response.get("model") == run["model_name"], "Teacher response model mismatch")
-    message = response.get("message")
+    require(not response.get("truncated"), "Teacher response stopped before completion")
+    if run["generation_parameters"].get("adapter") == LEGACY_ADAPTER:
+        require(response.get("done") is True, "Teacher response is incomplete or failed")
+        require(response.get("done_reason") == "stop", "Teacher response stopped before completion")
+        message = response.get("message")
+    else:
+        choices = response.get("choices")
+        require(isinstance(choices, list) and len(choices) == 1 and isinstance(choices[0], dict),
+                "Teacher response must contain one completed choice")
+        require(choices[0].get("finish_reason") == "stop", "Teacher response stopped before completion")
+        message = choices[0].get("message")
+        options = run["generation_parameters"]["options"]
+        usage = response.get("usage")
+        require(isinstance(usage, dict), "Teacher response is missing token usage")
+        prompt, completion = usage.get("prompt_tokens"), usage.get("completion_tokens")
+        require(type(prompt) is int and 0 < prompt <= options["num_ctx"] - options["num_predict"]
+                and type(completion) is int and 0 < completion <= options["num_predict"],
+                "Teacher response token usage exceeds the context/output budget")
     require(isinstance(message, dict) and message.get("role") == "assistant",
             "Teacher response must contain an assistant message")
-    require(not message.get("tool_calls") and not message.get("thinking"),
+    require(not message.get("tool_calls") and not message.get("thinking")
+            and not message.get("reasoning_content") and not message.get("reasoning"),
             "Teacher response contains unrecorded tool use or hidden reasoning")
     require(isinstance(message.get("content"), str), "Teacher content must be JSON text")
     output = _json(message["content"])
@@ -106,11 +125,13 @@ class _Verifier:
         from . import enhancement_prompts as prompts
 
         params = run["generation_parameters"]
-        require(set(params) == _PARAMETERS, "Unsupported or missing teacher adapter parameters")
-        require(params["adapter"] == ADAPTER
+        legacy = params.get("adapter") == LEGACY_ADAPTER
+        require(set(params) == (_LEGACY_PARAMETERS if legacy else _PARAMETERS), "Unsupported or missing teacher adapter parameters")
+        require(params["adapter"] in {ADAPTER, LEGACY_ADAPTER}
                 and params["envelope_builder_version"] == ENVELOPE_BUILDER_VERSION,
                 "Unsupported teacher request adapter/version")
-        require(run["runtime"] == "ollama", "Teacher adapter requires Ollama runtime")
+        require(run["runtime"] == ("ollama" if legacy else "llama.cpp"),
+                "Teacher adapter/runtime mismatch")
         require(run["prompt_version"] == prompts.PROMPT_VERSION, "Unknown teacher prompt version")
         try:
             question = prompts.stage_question(params["stage"])
@@ -118,16 +139,25 @@ class _Verifier:
         except (KeyError, ValueError) as exc:
             raise ContractError("Unknown teacher stage") from exc
         require(params["stage_question"] == question, "Teacher stage question differs from versioned prompt")
-        require(params["think"] is False, "Teacher adapter requires think=false")
-        require(isinstance(params["keep_alive"], (str, int))
-                and not isinstance(params["keep_alive"], bool), "Invalid teacher keep_alive")
+        if legacy:
+            require(params["think"] is False, "Legacy teacher adapter requires think=false")
+            require(isinstance(params["keep_alive"], (str, int))
+                    and not isinstance(params["keep_alive"], bool), "Invalid teacher keep_alive")
         require(isinstance(params["options"], dict), "Teacher options must be an object")
         canonical_bytes(params["options"])
+        if not legacy:
+            options = params["options"]
+            require(set(options) == {"temperature", "seed", "num_ctx", "num_predict"},
+                    "Unsupported or missing llama.cpp generation options")
+            require(type(options["seed"]) is int and type(options["num_ctx"]) is int
+                    and options["num_ctx"] > 0 and type(options["num_predict"]) is int
+                    and options["num_predict"] > 0 and type(options["temperature"]) in {int, float}
+                    and options["temperature"] >= 0, "Invalid llama.cpp generation options")
         start, cutoff = params["start_frame_index"], params["cutoff_frame_index"]
         require(type(start) is int and type(cutoff) is int and 0 <= start <= cutoff,
                 "Invalid teacher temporal window")
         require(run["input_mode"] == "causal_prefix" and not run["outcome_ids_seen"],
-                "Ollama evidence adapter accepts only outcome-blind causal inputs")
+                "Evidence adapter accepts only outcome-blind causal inputs")
         require(not run["input_reference_asset_ids"] and not run["previous_message_indices"],
                 "Teacher references and hidden conversation history are unsupported")
         parents = params["parent_run_ids"]
@@ -144,6 +174,28 @@ class _Verifier:
         require(isinstance(metadata, dict), "Invalid teacher model metadata")
         for key in ("model_name", "model_digest", "quantization", "runtime_version"):
             require(metadata.get(key) == run[key], f"Teacher model metadata mismatch: {key}")
+        if params["adapter"] == ADAPTER:
+            require(metadata.get("runtime") == "llama.cpp", "Teacher metadata runtime mismatch")
+            def fingerprint(value, kind):
+                require(isinstance(value, dict) and isinstance(value.get("path"), str)
+                        and bool(value["path"]) and isinstance(value.get("sha256"), str)
+                        and re.fullmatch(r"[0-9a-f]{64}", value["sha256"]),
+                        f"Teacher metadata requires a {kind} fingerprint")
+            for kind in ("model_file", "projector_file", "runtime_binary"):
+                fingerprint(metadata.get(kind), kind)
+            libraries = metadata["runtime_binary"].get("libraries")
+            require(isinstance(libraries, list), "Teacher metadata requires runtime library fingerprints")
+            for library in libraries:
+                fingerprint(library, "runtime library")
+            require(len({library["path"] for library in libraries}) == len(libraries),
+                    "Duplicate teacher runtime library fingerprint")
+            require(metadata["model_digest"] == "sha256:" + metadata["model_file"]["sha256"],
+                    "Teacher model digest differs from GGUF receipt")
+            require(metadata.get("binary_version") == run["runtime_version"],
+                    "Teacher runtime differs from llama.cpp binary receipt")
+            require(isinstance(metadata.get("capabilities"), list) and "vision" in metadata["capabilities"],
+                    "Teacher model receipt does not establish vision capability")
+            return
         tags, show, version = (metadata.get(k) for k in
                                ("tags_response", "show_response", "version_response"))
         require(isinstance(tags, dict) and isinstance(tags.get("models"), list)
@@ -240,17 +292,22 @@ class _Verifier:
                 and run["maximum_frame_index_seen"] == maximum,
                 "Teacher exposure maximum differs from actual transitive inputs")
         self.exposures[run["run_id"]] = (exposed_frames, exposed_annotations)
-        payload = {"adapter": ADAPTER, "envelope_builder_version": ENVELOPE_BUILDER_VERSION,
+        payload = {"adapter": params["adapter"], "envelope_builder_version": ENVELOPE_BUILDER_VERSION,
                    "stage": params["stage"], "question": params["stage_question"],
                    "window": {"start_frame_index": params["start_frame_index"],
                               "cutoff_frame_index": params["cutoff_frame_index"]},
                    "frames": frames, "original_annotations": annotations, "parent_outputs": parent_outputs}
-        return canonical_bytes({"model": run["model_name"], "stream": False,
-                                "format": prompts.response_schema(), "options": params["options"],
-                                "think": params["think"], "keep_alive": params["keep_alive"],
-                                "messages": [{"role": "system", "content": prompts.system_prompt(params["stage"])},
-                                             {"role": "user", "content": canonical_bytes(payload).decode("utf-8"),
-                                              "images": images}]})
+        messages = [{"role": "system", "content": prompts.system_prompt(params["stage"])},
+                    {"role": "user", "content": canonical_bytes(payload).decode("utf-8"), "images": images}]
+        if params["adapter"] == LEGACY_ADAPTER:
+            return canonical_bytes({"model": run["model_name"], "stream": False,
+                                    "format": prompts.response_schema(), "options": params["options"],
+                                    "think": params["think"], "keep_alive": params["keep_alive"],
+                                    "messages": messages})
+        from .llama_cpp import build_chat_request
+        return canonical_bytes(build_chat_request(model=run["model_name"], messages=messages,
+                                                   schema=prompts.response_schema(), **params["options"]))
+
 
     def verify(self, rid):
         require(rid in self.runs, "Missing teacher ancestor run")
@@ -283,6 +340,8 @@ def build_request(record, run, *, dataset_root, artifact_root=None):
     The current run may be a not-yet-appended draft receipt. Its request/response
     artifacts do not need to exist yet; every ancestor artifact must exist.
     """
+    require(run["generation_parameters"].get("adapter") == ADAPTER,
+            "New teacher requests require llama.cpp; legacy Ollama archives are read-only")
     verifier = _Verifier(record, dataset_root, artifact_root)
     verifier.active.add(run["run_id"])
     return verifier.request(run)
@@ -357,7 +416,7 @@ def validate_teacher_runs(record, *, dataset_root=None, artifact_root=None):
         return set()
     verifier = _Verifier(record, dataset_root, artifact_root)
     for rid, run in verifier.runs.items():
-        if run["generation_parameters"].get("adapter") == ADAPTER:
+        if run["generation_parameters"].get("adapter") in {ADAPTER, LEGACY_ADAPTER}:
             verifier.verify(rid)
     _bind_outputs(record, verifier)
     return set(verifier.outputs)

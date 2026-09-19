@@ -7,7 +7,7 @@ import unittest
 from unittest.mock import patch
 
 import test_medgemma_review as fixtures
-from test_medgemma_surgery_review import JointOllama
+from test_medgemma_surgery_review import JointLlamaCpp
 from test_qwen_draft_intake import make_rejected_fixture
 from yasargil.contract import ContractError, sha256_file
 from yasargil.dataset_inspector import InspectorStore
@@ -65,7 +65,7 @@ class MedGemmaRejectedDraftTests(unittest.TestCase):
 
     def test_failed_qwen_input_still_requires_explicit_opt_in(self):
         self.rejected_annotation()
-        client = JointOllama()
+        client = JointLlamaCpp()
         with self.assertRaises(ContractError):
             self.review(client, config=SurgeryReviewConfig())
         self.assertEqual(client.info_calls, [])
@@ -75,7 +75,7 @@ class MedGemmaRejectedDraftTests(unittest.TestCase):
 
     def test_explicit_review_is_one_call_with_all_selected_images_and_visible_validation_warning(self):
         self.rejected_annotation()
-        client = JointOllama()
+        client = JointLlamaCpp()
         summary = self.review(client)
         self.assertEqual(summary["status"], "completed")
         self.assertEqual(summary["selected_frame_count"], len(self.selected_ids))
@@ -86,14 +86,14 @@ class MedGemmaRejectedDraftTests(unittest.TestCase):
         self.assertEqual(context["qwen_validation"]["status"], "rejected_temporal_citations")
         self.assertTrue(context["qwen_validation"]["issues"])
         self.assertIn("failed", request["messages"][0]["content"])
-        image_messages = [row for row in request["messages"] if row.get("images")]
+        image_messages = [row for row in request["messages"] if isinstance(row.get("content"), list)]
         self.assertEqual(len(image_messages), len(self.selected_ids))
         source = {f["frame_id"]: f for f in self.fixture.source["frames"]}
         for frame_id, message in zip(self.selected_ids, image_messages):
-            locator = json.loads(message["content"].split(": ", 1)[1])
+            locator = json.loads(message["content"][0]["text"].split(": ", 1)[1])
             self.assertEqual(locator["frame_id"], frame_id)
-            self.assertEqual(len(message["images"]), 1)
-            self.assertEqual(base64.b64decode(message["images"][0]), Path(source[frame_id]["image_path"]).read_bytes())
+            self.assertEqual(sum(block["type"] == "image_url" for block in message["content"]), 1)
+            self.assertEqual(base64.b64decode(message["content"][1]["image_url"]["url"].split(",", 1)[1]), Path(source[frame_id]["image_path"]).read_bytes())
         self.assertEqual([row["frame_id"] for row in context["qwen_annotations"]], self.selected_ids)
         drafts = {row["frame_id"]: row for row in context["qwen_annotations"]}
         interval = drafts[self.bad_target]["contextual_claims"][0]["evidence_intervals"][0]
@@ -104,11 +104,11 @@ class MedGemmaRejectedDraftTests(unittest.TestCase):
         self.rejected_annotation(beyond_duration=True)
         self.assertFalse((self.parent / "round-00/result.json").exists())
         self.assertFalse((self.parent / "round-00/output.json").exists())
-        client = JointOllama()
+        client = JointLlamaCpp()
         self.review(client)
         context = json.loads(client.requests[0]["messages"][-1]["content"])
         self.assertEqual(context["media_timeline"]["duration_ms"], 8000)
-        self.assertEqual(sum(len(m.get("images", [])) for m in client.requests[0]["messages"]), 4)
+        self.assertEqual(sum(sum(block["type"] == "image_url" for block in m["content"]) for m in client.requests[0]["messages"] if isinstance(m["content"], list)), 4)
         batch = read(self.output / "surgery-evidence.json")
         self.assertEqual(batch["target_frame_ids"], self.selected_ids)
         draft = next(row for row in batch["qwen_annotations"] if row["frame_id"] == self.bad_target)
@@ -131,7 +131,7 @@ class MedGemmaRejectedDraftTests(unittest.TestCase):
 
     def test_intake_freezes_every_raw_artifact_and_shared_medgemma_response_with_hashes(self):
         self.rejected_annotation()
-        client = JointOllama()
+        client = JointLlamaCpp()
         self.review(client)
         plan = read(self.output / "run.json")
         audit = read(self.output / "draft-intake.json")
@@ -156,7 +156,7 @@ class MedGemmaRejectedDraftTests(unittest.TestCase):
 
     def test_inspector_displays_flagged_qwen_drafts_with_joint_reviews_and_original_citations(self):
         self.rejected_annotation(beyond_duration=True)
-        self.review(JointOllama())
+        self.review(JointLlamaCpp())
         store = InspectorStore(self.root, self.fixture.dataset)
         records = store.records()["records"]
         self.assertEqual(len(records), 1, "Frozen copies and flagged drafts must not create duplicate case cards")
@@ -175,9 +175,9 @@ class MedGemmaRejectedDraftTests(unittest.TestCase):
 
     def test_completed_flagged_review_resumes_without_model_calls_or_source_rewrite(self):
         self.rejected_annotation(beyond_duration=True)
-        self.review(JointOllama())
+        self.review(JointLlamaCpp())
         originals = {path: path.read_bytes() for path in (self.output / "calls").rglob("*.json")}
-        client = JointOllama()
+        client = JointLlamaCpp()
         self.assertEqual(self.review(client, resume=True)["status"], "completed")
         self.assertEqual(client.info_calls, [])
         self.assertEqual(client.requests, [])
@@ -186,11 +186,11 @@ class MedGemmaRejectedDraftTests(unittest.TestCase):
 
     def test_tampered_frozen_qwen_raw_response_rejects_resume_and_preserves_published_reviews(self):
         self.rejected_annotation()
-        self.review(JointOllama())
+        self.review(JointLlamaCpp())
         published = (self.output / "reviews.json").read_bytes()
         raw = self.output / "qwen/round-00/response.json"
         raw.write_bytes(raw.read_bytes() + b"\n")
-        client = JointOllama()
+        client = JointLlamaCpp()
         with self.assertRaises(ContractError):
             self.review(client, resume=True)
         self.assertEqual(client.info_calls, [])
@@ -205,7 +205,7 @@ class MedGemmaRejectedDraftTests(unittest.TestCase):
         verification["decoded_frame_ids"] = verification["decoded_frame_ids"][:-1]
         verification["decoded_frames"] -= 1
         write(path, verification)
-        client = JointOllama()
+        client = JointLlamaCpp()
         with self.assertRaises(ContractError):
             self.review(client)
         self.assertEqual(client.info_calls, [])

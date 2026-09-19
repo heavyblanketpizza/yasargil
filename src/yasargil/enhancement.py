@@ -263,7 +263,7 @@ def enhancement_protocol_fingerprint():
 
 def _model_identity(info):
     return {key: info[key] for key in ("model_name", "model_digest", "quantization", "runtime_version",
-                                      "runtime", "model_file", "projector_file", "runtime_binary") }
+                                      "runtime", "model_file", "projector_file", "runtime_binary")}
 
 
 def _read_json(path):
@@ -397,9 +397,6 @@ def enhance_sospine(dataset_root, output_dir, config, *, client=None, progress=N
         require(resume or not (destination / "session.json").exists(),
                 "Output directory was initialized by another writer; use resume")
         pause_path = destination / "PAUSE"
-        if resume and pause_path.exists():
-            require(pause_path.is_file() and not pause_path.is_symlink(), "Invalid PAUSE control file")
-            pause_path.unlink()
         seen = set(plan["initial_frame_indices"])
         record = _source_record(root, config, seen)
         snapshot = _source_snapshot(root, plan, record)
@@ -417,6 +414,9 @@ def enhance_sospine(dataset_root, output_dir, config, *, client=None, progress=N
             session = expected_session | {"created_at": datetime.now(timezone.utc).isoformat()}
             atomic_json(session_path, session)
         _new_or_equal_json(destination / "plan.json", plan)
+        if resume and pause_path.exists():
+            require(pause_path.is_file() and not pause_path.is_symlink(), "Invalid PAUSE control file")
+            pause_path.unlink()
         calls, outputs, selections = [], {}, []
         started = time.monotonic()
         checkpoint_path = destination / "checkpoint.json"

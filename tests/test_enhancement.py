@@ -9,7 +9,7 @@ from unittest.mock import patch
 import test_contract
 from yasargil.contract import ContractError, validate_record
 from yasargil.enhancement import EnhancementConfig, enhance_sospine, plan_enhancement, select_search_indices
-from yasargil.ollama import encode_request
+from yasargil.llama_cpp import encode_request
 from yasargil.checkpoint import directory_lock
 import yasargil.enhancement as enhancement
 
@@ -24,16 +24,17 @@ class ScriptedClient:
 
     def model_info(self, model):
         digest = "sha256:" + hashlib.sha256(model.encode()).hexdigest()
-        details = {"quantization_level": "Q4_K_M"}
         return {"name": model, "digest": digest, "quantization": "Q4_K_M", "runtime_version": "test-only",
                 "capabilities": ["vision"], "model_name": model, "model_digest": digest,
-                "tags_response": {"models": [{"name": model, "model": model, "digest": digest, "details": details}]},
-                "show_response": {"details": details, "capabilities": ["vision"]},
-                "version_response": {"version": "test-only"}}
+                "runtime": "llama.cpp", "binary_version": "test-only",
+                "model_file": {"path": "/fixture/" + model + ".gguf", "sha256": digest.removeprefix("sha256:")},
+                "projector_file": {"path": "/fixture/" + model + "-mmproj.gguf", "sha256": "2" * 64},
+                "runtime_binary": {"path": "/fixture/llama-server", "sha256": "3" * 64, "libraries": []}}
+
 
     def chat_raw(self, request):
         self.requests.append(copy.deepcopy(request))
-        payload = json.loads(request["messages"][1]["content"])
+        payload = json.loads(request["messages"][1]["content"][0]["text"])
         stage = payload["stage"]
         frame = payload["frames"][-1]["frame_id"]
         annotation_ids = [a["annotation_id"] for a in payload["original_annotations"]
@@ -50,11 +51,11 @@ class ScriptedClient:
         if stage == "review" and self.search:
             output["searches"] = [{"query": "What is visible in the middle frame?", "start_frame_index": 2,
                                    "end_frame_index": 2, "reason": "The middle released frame has not been inspected."}]
-        envelope = {"model": request["model"], "done": True, "done_reason": "stop",
-                    "message": {"role": "assistant", "content": json.dumps(output)},
-                    "prompt_eval_count": 100, "eval_count": 50}
+        envelope = {"model": request["model"], "choices": [{"index": 0, "finish_reason": "stop",
+                    "message": {"role": "assistant", "content": json.dumps(output)}}],
+                    "usage": {"prompt_tokens": 100, "completion_tokens": 50, "total_tokens": 150}}
         if stage == self.fail_stage:
-            envelope["message"]["content"] = "not valid JSON"
+            envelope["choices"][0]["message"]["content"] = "not valid JSON"
         self.last_response_bytes = encode_request(envelope)
         return self.last_response_bytes
 
@@ -76,7 +77,7 @@ class EnhancementTests(unittest.TestCase):
         self.assertEqual(result["observed_frame_indices"], [1, 2, 3])
         self.assertFalse(result["training_eligible"])
         self.assertEqual(before, {p: hashlib.sha256(p.read_bytes()).hexdigest() for p in before})
-        payloads = [json.loads(r["messages"][1]["content"]) for r in client.requests]
+        payloads = [json.loads(r["messages"][1]["content"][0]["text"]) for r in client.requests]
         self.assertEqual([p["stage"] for p in payloads], ["propose", "independent_observe", "review", "search", "final_revise"])
         self.assertEqual(payloads[1]["parent_outputs"], [])
         self.assertEqual([f["frame_id"] for f in payloads[3]["frames"]], ["f000002"])
@@ -148,6 +149,7 @@ class EnhancementTests(unittest.TestCase):
         plan = plan_enhancement(self.root, self.config)
         self.assertEqual(plan["initial_frame_indices"], [1, 3])
         self.assertFalse(plan["native_video_processor"])
+        self.assertEqual(plan["transport"], "llama_cpp_ordered_images")
         for dest in (self.root / "generated", self.base):
             with self.assertRaises(ContractError):
                 enhance_sospine(self.root, dest, self.config, client=ScriptedClient())
@@ -177,7 +179,7 @@ class EnhancementTests(unittest.TestCase):
         second = ScriptedClient()
         completed = enhance_sospine(self.root, dest, self.config, client=second, resume=True)
         self.assertEqual(completed["model_calls"], 5)
-        self.assertEqual([json.loads(r["messages"][1]["content"])["stage"] for r in second.requests],
+        self.assertEqual([json.loads(r["messages"][1]["content"][0]["text"])["stage"] for r in second.requests],
                          ["search", "final_revise"])
         self.assertEqual(originals, {p: p.read_bytes() for p in originals})
         archive = json.loads((dest / "archive.json").read_text())
@@ -207,6 +209,27 @@ class EnhancementTests(unittest.TestCase):
         self.assertTrue((dest / "calls/run-003-review/attempts/0002/success.json").is_file())
         archive = json.loads((dest / "archive.json").read_text())
         self.assertTrue(any("attempts/0002/response.json" in a["location"] for a in archive["assets"]))
+
+    def test_runtime_rejected_token_budget_cannot_be_salvaged_on_resume(self):
+        from yasargil.llama_cpp import LlamaCppError
+        client = ScriptedClient(search=False)
+        original_chat = client.chat_raw
+        def overbudget(request):
+            envelope = json.loads(original_chat(request))
+            envelope["usage"]["completion_tokens"] = request["max_tokens"] + 1
+            client.last_response_bytes = encode_request(envelope)
+            raise LlamaCppError("llama.cpp token usage exceeds output budget")
+        client.chat_raw = overbudget
+        dest = self.base / "invalid-usage"
+        with self.assertRaises(LlamaCppError):
+            enhance_sospine(self.root, dest, self.config, client=client)
+        failed_path = dest / "calls/run-001-propose/response.json"
+        failed_bytes = failed_path.read_bytes()
+        resumed = ScriptedClient(search=False)
+        enhance_sospine(self.root, dest, self.config, client=resumed, resume=True)
+        self.assertEqual(len(resumed.requests), 3)
+        self.assertEqual(failed_path.read_bytes(), failed_bytes)
+        self.assertTrue((dest / "calls/run-001-propose/attempts/0002/success.json").exists())
 
     def test_complete_response_survives_interruption_before_success_checkpoint(self):
         dest = self.base / "salvage-response"
@@ -267,6 +290,46 @@ class EnhancementTests(unittest.TestCase):
             with self.assertRaisesRegex(ContractError, "prompt identity changed"):
                 enhance_sospine(self.root, dest, self.config, client=ScriptedClient(), resume=True)
         self.assertFalse(client.requests)
+
+    def test_resume_rejects_changed_projector_or_binary_with_same_version(self):
+        dest = self.base / "pinned-runtime-files"
+        enhance_sospine(self.root, dest, self.config, client=ScriptedClient(), pause_requested=lambda: True)
+        for field in ("projector_file", "runtime_binary"):
+            with self.subTest(field=field):
+                client = ScriptedClient()
+                original = client.model_info
+                client.model_info = lambda name: original(name) | {field: {"path": "/fixture/changed", "sha256": "f" * 64}}
+                with self.assertRaisesRegex(ContractError, "Resume rejected"):
+                    enhance_sospine(self.root, dest, self.config, client=client, resume=True)
+                self.assertFalse(client.requests)
+
+    def test_resume_rejects_changed_runtime_library_with_same_server_binary(self):
+        dest = self.base / "pinned-runtime-library"
+        enhance_sospine(self.root, dest, self.config, client=ScriptedClient(), pause_requested=lambda: True)
+        client = ScriptedClient()
+        original = client.model_info
+        def modified_library(name):
+            info = original(name)
+            info["runtime_binary"]["libraries"] = [{"path": "/fixture/libllama.dylib", "sha256": "f" * 64}]
+            return info
+        client.model_info = modified_library
+        with self.assertRaisesRegex(ContractError, "Resume rejected"):
+            enhance_sospine(self.root, dest, self.config, client=client, resume=True)
+        self.assertFalse(client.requests)
+
+    def test_legacy_resume_is_read_only_and_rejected_before_inference(self):
+        dest = self.base / "legacy-job"
+        enhance_sospine(self.root, dest, self.config, client=ScriptedClient(), pause_requested=lambda: True)
+        session = json.loads((dest / "session.json").read_text())
+        session["prompt_identity"]["adapter"] = "ollama-evidence-v1"
+        (dest / "session.json").write_text(json.dumps(session))
+        (dest / "PAUSE").write_text("paused legacy job")
+        originals = {p: p.read_bytes() for p in dest.rglob("*") if p.is_file() and p.name != ".lock"}
+        client = ScriptedClient()
+        with self.assertRaisesRegex(ContractError, "legacy Ollama jobs are read-only"):
+            enhance_sospine(self.root, dest, self.config, client=client, resume=True)
+        self.assertFalse(client.requests)
+        self.assertEqual(originals, {p: p.read_bytes() for p in originals})
 
     def test_model_identity_is_rechecked_between_inferences(self):
         client = ScriptedClient()

@@ -9,7 +9,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from .contract import ContractError, export_records, read_records, require, validate_corpus, write_new_json
-from .ollama import MEDGEMMA_MODEL, QWEN_MODEL, OllamaClient, OllamaError
+from .llama_cpp import MEDGEMMA_MODEL, QWEN_MODEL, LlamaCppClient, LlamaCppError
 
 
 @contextmanager
@@ -54,8 +54,7 @@ def main(argv=None):
     imp.add_argument("--case-id", required=True)
     imp.add_argument("--frame-indices", type=int, nargs="+", required=True)
     imp.add_argument("--output", type=Path, required=True)
-    models = sub.add_parser("models", help="Inspect required local Ollama models, or explicitly pull them")
-    models.add_argument("--pull", action="store_true", help="Download/update the two requested models")
+    models = sub.add_parser("models", help="Inspect local llama.cpp model files and runtime identities")
     enhance = sub.add_parser("enhance-sospine", help="Qwen discovery and MedGemma review with retained evidence")
     enhance.add_argument("--dataset-root", type=Path, required=True)
     enhance.add_argument("--case-id", required=True)
@@ -93,8 +92,8 @@ def main(argv=None):
         command.add_argument("--qwen-model", default=QWEN_MODEL)
         command.add_argument("--medgemma-model", default=MEDGEMMA_MODEL)
     for command in (models, enhance, batch, resume):
-        command.add_argument("--ollama-url", default="http://127.0.0.1:11434")
-        command.add_argument("--timeout", type=float, default=600, help="Seconds per Ollama request")
+        command.add_argument("--project-root", type=Path, default=Path.cwd(), help="Root containing .runtime")
+        command.add_argument("--timeout", type=float, default=600, help="Seconds per llama.cpp request")
     for name in ("validate", "review-packet", "export"):
         command = sub.add_parser(name)
         command.add_argument("records", type=Path)
@@ -182,7 +181,7 @@ def main(argv=None):
                 dataset_root = session["dataset_root"]
             with cooperative_stop() as paused:
                 result = run(dataset_root, args.output_dir, config, resume=True,
-                             client=OllamaClient(args.ollama_url, timeout=args.timeout), pause_requested=paused,
+                             client=LlamaCppClient(args.project_root, timeout=args.timeout), pause_requested=paused,
                              progress=lambda message: print(message, flush=True))
             print(json.dumps(result, indent=2))
             return
@@ -197,25 +196,15 @@ def main(argv=None):
                 require(args.output_dir is not None, "--output-dir is required unless --dry-run is used")
                 with cooperative_stop() as paused:
                     result = enhance_batch(args.dataset_root, args.output_dir, config,
-                        client=OllamaClient(args.ollama_url, timeout=args.timeout), pause_requested=paused,
+                        client=LlamaCppClient(args.project_root, timeout=args.timeout), pause_requested=paused,
                         progress=lambda message: print(message, flush=True))
                 print(json.dumps(result, indent=2))
             return
         if args.command == "models":
-            client = OllamaClient(args.ollama_url, timeout=args.timeout)
+            client = LlamaCppClient(args.project_root, timeout=args.timeout)
             for name in (args.qwen_model, args.medgemma_model):
-                if args.pull:
-                    last = [None]
-                    def progress(event):
-                        status = event.get("status", "")
-                        percent = (100 * event.get("completed", 0) // event["total"]) if event.get("total") else None
-                        key = (status, None if percent is None else percent // 10)
-                        if key != last[0]:
-                            print(f"{name}: {status}" + (f" {percent}%" if percent is not None else ""), flush=True)
-                            last[0] = key
-                    client.pull(name, progress=progress)
                 info = client.model_info(name)
-                print(json.dumps({k: info[k] for k in ("name", "digest", "quantization", "capabilities", "runtime_version")}))
+                print(json.dumps(info))
             return
         if args.command == "enhance-sospine":
             from .enhancement import EnhancementConfig, enhance_sospine, plan_enhancement
@@ -229,7 +218,7 @@ def main(argv=None):
                 with cooperative_stop() as paused:
                     result = enhance_sospine(args.dataset_root, args.output_dir, config,
                                          resume=args.resume, pause_requested=paused,
-                                         client=OllamaClient(args.ollama_url, timeout=args.timeout),
+                                         client=LlamaCppClient(args.project_root, timeout=args.timeout),
                                          progress=lambda message: print(message, flush=True))
                 print(json.dumps(result, indent=2))
             return
@@ -260,7 +249,7 @@ def main(argv=None):
     except KeyboardInterrupt:
         print("yasargil: interrupted; retained run artifacts are available in the output directory", file=sys.stderr)
         raise SystemExit(130) from None
-    except (ContractError, OllamaError, OSError, ValueError, KeyError) as exc:
+    except (ContractError, LlamaCppError, OSError, ValueError, KeyError) as exc:
         print(f"yasargil: {exc}", file=sys.stderr)
         raise SystemExit(2) from exc
 

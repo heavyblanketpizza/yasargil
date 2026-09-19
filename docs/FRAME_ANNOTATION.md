@@ -11,16 +11,29 @@ claims that depend on the surrounding video. Every contextual claim cites
 bounded time intervals linked to actual source observations. Source files,
 timestamps, frame indices, and hashes remain attached throughout.
 
-After this pass finishes, [MedGemma frame review](MEDGEMMA_FRAME_REVIEW.md) can
-revise each draft using the key frame, before/after observations, cited supporting
-frames, and original dataset annotations. Its further evidence requests are
-saved for later; that stage does not dispatch Qwen or TimeLens2 searches.
+**Qwen writes this descriptive text.** The original SOSpine annotations are
+instrument labels and coordinates in `sospine_tool_tips.csv` (manual tool tips)
+and `sospine_bbox.csv` (computed boxes), not these natural-language descriptions.
+This Qwen request receives the video, selected stills, and documented procedure
+background; it does not receive those CSV rows. Software attaches the source
+filenames, timestamps, hashes, and supporting-frame records to Qwen's output.
+
+After this pass finishes, the current [MedGemma review](MEDGEMMA_FRAME_REVIEW.md)
+assesses all selected stills and their Qwen drafts together with original dataset
+instrument labels and coordinates in one request. It does not automatically
+include neighboring or Qwen-cited supporting frames. Its further evidence requests are saved for later;
+that stage does not dispatch Qwen or TimeLens2 searches. See the
+[research status](../README.md#research-status-and-known-limitations) for observed
+temporal-citation failures and the review protocol's unproven added value.
 
 ## Run it
 
 Use the same local llama.cpp and Qwen installation as
 [complete-video frame selection](SMART_FRAME_SELECTION.md). This command consumes
 an existing final selection; it does not rerun the embedding selector.
+The full-video path already uses llama.cpp; see the
+[runtime migration status](LLAMA_CPP.md#migration-from-ollama) for the separate
+enhancement and MedGemma paths formerly using Ollama.
 
 Prepare a new annotation run without starting Qwen:
 

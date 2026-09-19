@@ -190,9 +190,14 @@ def _parse(raw, batch, config):
     LlamaCppClient._validate_chat(envelope, config.medgemma_model)
     message = envelope["choices"][0]["message"]
     require(not message.get("tool_calls"), "MedGemma cannot dispatch tools")
-    count = envelope.get("usage", {}).get("prompt_tokens")
+    usage = envelope.get("usage")
+    require(isinstance(usage, dict), "MedGemma token usage is unavailable")
+    count = usage.get("prompt_tokens")
     require(type(count) is int and 0 < count <= config.num_ctx - config.num_predict,
             "MedGemma prompt usage is unavailable or leaves insufficient answer capacity")
+    completion = usage.get("completion_tokens")
+    require(type(completion) is int and 0 < completion <= config.num_predict,
+            "MedGemma completion usage is unavailable or exceeds the answer budget")
     try:
         content = _strict_json(message["content"])
     except (ValueError, UnicodeError) as exc:
@@ -246,9 +251,10 @@ def _call(output, batch, config, client_factory, *, allow_inference):
         metadata = client.model_info(config.medgemma_model)
         require(metadata.get("name") == config.medgemma_model and "vision" in metadata.get("capabilities", []),
                 "Surgery review requires the configured vision model")
+        identity = _identity(metadata)
         pin = output / "model-info.json"
         if pin.exists():
-            require(_identity(_read(pin)) == _identity(metadata), "Pinned MedGemma model or runtime changed")
+            require(_identity(_read(pin)) == identity, "Pinned MedGemma model or runtime changed")
         else:
             atomic_json(pin, metadata)
         if not allow_inference():
