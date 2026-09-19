@@ -7,7 +7,7 @@ name = "yasargil"
 version = "2.1.0"
 description = "Reviewable surgical dataset enhancement and multimodal training exports"
 license = "Apache-2.0"
-license-files = ["LICENSE", "src/yasargil/review_ui/fonts/LICENSES.txt"]
+license-files = ["LICENSE"]
 requires-python = ">=3.10"
 dependencies = ["jsonschema==4.26.0", "Pillow>=10,<13"]
 
@@ -21,7 +21,7 @@ yasargil = "yasargil.__main__:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-yasargil = ["review_ui/*.html", "review_ui/*.css", "review_ui/*.js", "review_ui/fonts/*.ttf", "review_ui/fonts/*.txt"]
+yasargil = ["review_ui/*.html", "review_ui/*.css", "review_ui/*.js"]
 
 [tool.setuptools.data-files]
 "share/yasargil/schemas" = ["schemas/enhancement-record.schema.json"]

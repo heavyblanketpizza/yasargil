@@ -9,6 +9,12 @@ dist/
 outputs/
 .DS_Store
 
+# Meslo is an optional locally installed font, never a vendored asset.
+[Mm]eslo*.ttf
+[Mm]eslo*.otf
+[Mm]eslo*.woff
+[Mm]eslo*.woff2
+
 # Only reviewed, user-facing Markdown belongs in version control.
 *.[mM][dD]
 !/README.md

@@ -231,8 +231,6 @@ Third-party materials retain their own terms:
 - **Model weights and external runtimes:** obtain these separately under their
   upstream terms, including the [Health AI Developer Foundations terms](https://developers.google.com/health-ai-developer-foundations/terms)
   for MedGemma. Yasargil's license does not replace those terms.
-- **Bundled fonts:** the unmodified Meslo Nerd Font files retain the licenses
-  and attribution in [font notices](src/yasargil/review_ui/fonts/LICENSES.txt).
 
 Yasargil is research software. Its outputs have not been validated for clinical
 decision-making or live surgical guidance. This describes the project's
