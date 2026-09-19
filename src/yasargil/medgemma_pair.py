@@ -11,7 +11,7 @@ from .annotation_integrity import verify_annotation_output
 from .checkpoint import atomic_json
 from .contract import require, sha256_file
 from .medgemma_surgery_review import SurgeryReviewConfig, _protocol_hash, run_review
-from .ollama import OllamaClient
+from .llama_cpp import LlamaCppClient
 from .smart_selection import _write
 
 
@@ -70,7 +70,7 @@ def _pin_evidence(output, state, evidence):
 
 
 def run_pair(annotation_pair, output_dir, *, resume=False, prepare_only=False,
-             allow_rejected_temporal_citations=None,
+             allow_rejected_temporal_citations=None, project_root=None,
              should_stop=lambda: False, progress=print, poll_seconds=15,
              review_runner=None, integrity_verifier=None):
     output = Path(output_dir).expanduser().resolve()
@@ -85,7 +85,7 @@ def run_pair(annotation_pair, output_dir, *, resume=False, prepare_only=False,
         config = SurgeryReviewConfig(allow_rejected_temporal_citations=bool(allow_rejected_temporal_citations))
         config.validate()
         output.mkdir(parents=True)
-        plan = {"schema_version": PROTOCOL, "annotation_pair": str(parent),
+        plan = {"schema_version": PROTOCOL, "runtime": "llama.cpp", "annotation_pair": str(parent),
                 "annotation_pair_sha256": sha256_file(parent / "run.json"), "config": asdict(config),
                 "review_protocol_sha256": _protocol_hash(), "request_timeout_seconds": 21600,
                 "cases": list(CASES)}
@@ -95,6 +95,8 @@ def run_pair(annotation_pair, output_dir, *, resume=False, prepare_only=False,
     with (output / ".pair.lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         plan, state = _read(output / "run.json"), _read(output / "state.json")
+        require(plan.get("runtime") == "llama.cpp",
+                "This MedGemma pair predates the llama.cpp migration; start a new output directory")
         require(plan["schema_version"] == PROTOCOL and state["plan_sha256"] == sha256_file(output / "run.json"),
                 "Frozen MedGemma pair configuration changed")
         require(plan["review_protocol_sha256"] == _protocol_hash(), "MedGemma review prompt changed")
@@ -161,7 +163,7 @@ def run_pair(annotation_pair, output_dir, *, resume=False, prepare_only=False,
                         archive.mkdir(exist_ok=True)
                         directory.rename(archive / f"{case}-{time.time_ns()}")
                     summary = runner(parent / case, directory, config, resume=can_resume,
-                        client=OllamaClient(timeout=plan["request_timeout_seconds"]), should_stop=pause, progress=progress)
+                        client=LlamaCppClient(project_root, timeout=plan["request_timeout_seconds"]), should_stop=pause, progress=progress)
                     if summary["status"] == "paused":
                         job["status"] = "pending"
                         state.update(status="paused", active_case=None)
@@ -194,6 +196,7 @@ def main():
     parser.add_argument("--annotation-pair", type=Path)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--resume", action="store_true")
+    parser.add_argument("--project-root", type=Path)
     parser.add_argument("--prepare-only", action="store_true")
     parser.add_argument("--allow-rejected-temporal-citations", action="store_true", default=None,
                         help="Accept only audited Qwen temporal-citation rejections; freeze this override in a new plan")
@@ -201,6 +204,7 @@ def main():
     with cooperative_stop() as should_stop:
         state = run_pair(args.annotation_pair, args.output_dir, resume=args.resume, prepare_only=args.prepare_only,
                         allow_rejected_temporal_citations=args.allow_rejected_temporal_citations,
+                        project_root=args.project_root,
                         should_stop=should_stop, progress=lambda message: print(message, flush=True))
     print(json.dumps(state, indent=2))
 

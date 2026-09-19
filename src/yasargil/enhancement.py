@@ -1,6 +1,6 @@
 """Bounded Qwen discovery and MedGemma inspection of released SOSpine frames.
 
-The Ollama transport carries ordered original images, not native video tensors.
+The llama.cpp transport carries ordered original images, not native video tensors.
 All model output is a draft. Exact requests, responses and revisions are kept.
 """
 from __future__ import annotations
@@ -18,6 +18,7 @@ from .contract import (SCHEMA_PATH, ContractError, canonical_hash, require, reso
                        sha256_file, validate_record, write_new_json)
 from .checkpoint import atomic_bytes, atomic_json, directory_lock, durable_mkdir
 from .sospine import import_case
+from .llama_cpp import LlamaCppClient, MEDGEMMA_MODEL, QWEN_MODEL
 from .teacher import EVENT_QUESTION, frame_caption
 
 
@@ -30,8 +31,8 @@ class EnhancementConfig:
     search_frames: int = 4
     max_frames: int = 24
     max_rounds: int = 1
-    qwen_model: str = "qwen3.8:27b-q4_K_M"
-    medgemma_model: str = "medgemma:27b"
+    qwen_model: str = QWEN_MODEL
+    medgemma_model: str = MEDGEMMA_MODEL
     num_ctx: int = 65536
     num_predict: int = 4096
     seed: int = 42
@@ -77,7 +78,7 @@ def plan_enhancement(dataset_root, config):
     require(pool, "No released frames in the requested window")
     return {"config": asdict(config), "available_frame_indices": pool,
             "initial_frame_indices": uniform_indices(pool, config.initial_frames),
-            "transport": "ollama_ordered_images", "native_video_processor": False,
+            "transport": "llama_cpp_ordered_images", "native_video_processor": False,
             "grounder": "qwen_targeted_reinspection", "outcomes_supplied_to_models": False,
             "maximum_model_calls": 3 + 2 * config.max_rounds,
             "timestamp_basis": "release_indices_only; original capture timestamps unavailable"}
@@ -261,7 +262,8 @@ def enhancement_protocol_fingerprint():
 
 
 def _model_identity(info):
-    return {key: info[key] for key in ("model_name", "model_digest", "quantization", "runtime_version")}
+    return {key: info[key] for key in ("model_name", "model_digest", "quantization", "runtime_version",
+                                      "runtime", "model_file", "projector_file", "runtime_binary") }
 
 
 def _read_json(path):
@@ -375,8 +377,7 @@ def enhance_sospine(dataset_root, output_dir, config, *, client=None, progress=N
     verifying that log. Failed attempts and partial finalization are retained.
     """
     from .enhancement_prompts import PROMPT_VERSION, stage_question, validate_output
-    from .ollama import OllamaClient
-    from .teacher import build_request, parse_response
+    from .teacher import ADAPTER, ENVELOPE_BUILDER_VERSION, build_request, parse_response
 
     plan = plan_enhancement(dataset_root, config)
     root, destination = Path(dataset_root).resolve(), Path(output_dir)
@@ -389,7 +390,7 @@ def enhance_sospine(dataset_root, output_dir, config, *, client=None, progress=N
     else:
         durable_mkdir(destination)
     destination = destination.resolve()
-    client = client or OllamaClient()
+    client = client or LlamaCppClient()
 
     with directory_lock(destination):
         durable_mkdir(destination)
@@ -408,6 +409,8 @@ def enhance_sospine(dataset_root, output_dir, config, *, client=None, progress=N
                             "prompt_identity": enhancement_protocol_fingerprint()}
         if session_path.exists():
             session = _read_json(session_path)
+            require(session.get("prompt_identity", {}).get("adapter") == ADAPTER,
+                    "Resume rejected: legacy Ollama jobs are read-only; start a new llama.cpp run")
             require(all(session.get(k) == v for k, v in expected_session.items()),
                     "Resume rejected: source bytes, config, dataset root, or prompt identity changed")
         else:
@@ -474,7 +477,7 @@ def enhance_sospine(dataset_root, output_dir, config, *, client=None, progress=N
                                                   origin="deterministically_derived"))
                 metadata[name] = (info, aid)
             require(metadata[config.qwen_model][0]["digest"] != metadata[config.medgemma_model][0]["digest"],
-                    "Discovery and medical review tags resolve to the same model weights")
+                    "Discovery and medical review models resolve to the same model weights")
             model_manifest = {name: {"identity": _model_identity(info), "asset_id": aid,
                                     "receipt_sha256": next(a["sha256"] for a in record["assets"] if a["asset_id"] == aid)}
                               for name, (info, aid) in metadata.items()}
@@ -486,14 +489,14 @@ def enhance_sospine(dataset_root, output_dir, config, *, client=None, progress=N
                 fids = [f"f{i:06d}" for i in sorted(indices)]
                 aids = [a["annotation_id"] for a in record["original_annotations"]
                         if a["original_kind"] in {"keypoint", "bbox"} and set(a["frame_ids"]) <= set(fids)]
-                parameters = {"adapter": "ollama-evidence-v1", "envelope_builder_version": "1", "stage": stage,
+                parameters = {"adapter": ADAPTER, "envelope_builder_version": ENVELOPE_BUILDER_VERSION, "stage": stage,
                               "parent_run_ids": parents, "cutoff_frame_index": config.cutoff_index,
                               "start_frame_index": config.start_index, "stage_question": stage_question(stage),
                               "options": {"temperature": 0, "seed": config.seed, "num_ctx": config.num_ctx,
                                           "num_predict": config.num_predict},
-                              "think": False, "keep_alive": 0, "model_metadata_asset_id": metadata_id}
+                              "model_metadata_asset_id": metadata_id}
                 run = {"run_id": run_id, "model_name": model, "model_digest": info["digest"],
-                       "quantization": info["quantization"], "runtime": "ollama", "runtime_version": info["runtime_version"],
+                       "quantization": info["quantization"], "runtime": "llama.cpp", "runtime_version": info["runtime_version"],
                        "request_asset_id": f"{run_id}-request", "response_asset_id": f"{run_id}-response",
                        "prompt_version": PROMPT_VERSION, "input_mode": "causal_prefix", "input_frame_ids": fids,
                        "input_annotation_ids": aids, "input_reference_asset_ids": [], "previous_message_indices": [],
@@ -603,8 +606,8 @@ def enhance_sospine(dataset_root, output_dir, config, *, client=None, progress=N
                     envelope = json.loads(raw)
                     call = {"run_id": run_id, "stage": stage, "model": model, "input_frame_ids": fids,
                             "parent_run_ids": parents, "elapsed_seconds": None if successful else elapsed,
-                            "output": output, "prompt_eval_count": envelope.get("prompt_eval_count"),
-                            "eval_count": envelope.get("eval_count")}
+                            "output": output, "prompt_tokens": envelope.get("usage", {}).get("prompt_tokens"),
+                            "completion_tokens": envelope.get("usage", {}).get("completion_tokens")}
                     atomic_json(parsed_path, call)
                 success = {"files": {name: sha256_file(attempt / name)
                                      for name in ("request.json", "run.json", "response.json", "parsed.json")},
@@ -674,7 +677,7 @@ def enhance_sospine(dataset_root, output_dir, config, *, client=None, progress=N
                           "conversation_turns": len(record["training_view"]["turn_links"]),
                           "observed_frame_indices": sorted(seen), "unresolved_searches": final["searches"],
                           "elapsed_seconds": previous_elapsed + time.monotonic() - started,
-                          "transport": "ollama_ordered_images", "native_video_processor": False,
+                          "transport": "llama_cpp_ordered_images", "native_video_processor": False,
                           "grounder": "qwen_targeted_reinspection", "training_eligible": False}
             checkpoint("finalizing")
             completion = _publish_finalization(destination, record, calls, completion)

@@ -1088,9 +1088,7 @@ def make_server(store, port=8765):
                     return self._json({"error": str(exc), "fallback": "canonical_source_stills"}, 503, head)
                 if preview:
                     return self._file(preview, head)
-            static = {"/": "index.html", "/app.js": "app.js", "/style.css": "style.css", "/fonts.css": "fonts.css",
-                      "/fonts/MesloLGS-NF-Regular.ttf": "fonts/MesloLGS-NF-Regular.ttf",
-                      "/fonts/MesloLGS-NF-Bold.ttf": "fonts/MesloLGS-NF-Bold.ttf"}
+            static = {"/": "index.html", "/app.js": "app.js", "/style.css": "style.css"}
             if path in static and (static_root / static[path]).is_file():
                 return self._file(static_root / static[path], head)
             self._json({"error": "Not found"}, 404, head)

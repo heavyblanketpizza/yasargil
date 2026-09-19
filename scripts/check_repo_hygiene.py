@@ -34,24 +34,43 @@ PUBLIC_MARKDOWN = {
     "docs/SMART_FRAME_SELECTION.md",
     "docs/TRAINING.md",
 }
-UPSTREAM_FONT_LICENSE = "src/yasargil/review_ui/fonts/LICENSES.txt"
 PUBLIC_MEDIA = {"docs/assets/yasargil-banner.webp"}
-INTERNAL_DIRECTORIES = {"research", "notes", "private", ".agents", ".codex", ".claude"}
-DATA_DIRECTORIES = {"data", "dataset", "datasets", "outputs", "sospine", "frames", "archives", "models"}
+# Keep path exceptions and excluded formats aligned with .gitignore.
+PUBLIC_ARTIFACTS = {
+    "schemas/enhancement-record.schema.json",
+    "src/yasargil/review_ui/index.html",
+}
+ARTIFACT_SUFFIXES = {".json", ".json5", ".jsonc", ".html", ".htm", ".ipynb"}
+FONT_SUFFIXES = {".ttf", ".otf", ".woff", ".woff2", ".eot"}
+INTERNAL_DIRECTORIES = {
+    "research", "notes", "private", ".agents", ".codex", ".claude", ".idea", ".vscode",
+}
+LOCAL_DIRECTORIES = {
+    "__pycache__", ".venv", "venv", ".runtime", "node_modules", "build", "dist",
+    ".cache", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".tox", ".nox",
+    ".ipynb_checkpoints", "htmlcov",
+}
+CREDENTIAL_DIRECTORIES = {".ssh", ".aws", ".azure", ".kube", ".gnupg"}
+DATA_DIRECTORIES = {
+    "data", "dataset", "datasets", "outputs", "sospine", "frames", "archives",
+    "models", "checkpoints",
+}
 DATA_SUFFIXES = {
     ".csv", ".tsv", ".jsonl", ".parquet", ".arrow", ".feather",
     ".npy", ".npz", ".h5", ".hdf5", ".pt", ".pth", ".safetensors", ".gguf",
+    ".bin", ".ckpt", ".onnx", ".pkl", ".pickle", ".joblib",
     ".sqlite", ".sqlite3", ".db", ".log",
 }
 MEDIA_SUFFIXES = {
     ".jpg", ".jpeg", ".png", ".gif", ".webp", ".tif", ".tiff", ".bmp",
     ".dcm", ".nii", ".mp4", ".mov", ".avi", ".mkv", ".webm",
-    ".wav", ".mp3", ".flac", ".pdf", ".docx", ".xlsx",
+    ".wav", ".mp3", ".flac", ".pdf", ".docx", ".xlsx", ".pptx",
     ".zip", ".tar", ".gz", ".bz2", ".xz", ".7z", ".rar", ".tgz",
 }
+CREDENTIAL_SUFFIXES = {".pem", ".key", ".p12", ".pfx"}
+SSH_KEY_NAMES = {"id_rsa", "id_dsa", "id_ecdsa", "id_ed25519"}
 CREDENTIAL_NAMES = {
-    "credentials", "secrets",
-    "id_rsa", "id_dsa", "id_ecdsa", "id_ed25519", ".netrc", ".npmrc",
+    "credentials", "secrets", ".netrc", ".npmrc", ".pypirc",
 }
 EMAIL = re.compile(r"[A-Za-z0-9._%+\-]+@([A-Za-z0-9.\-]+\.[A-Za-z]{2,})")
 MACHINE_PATH = re.compile(r"/(?:Users|home|Volumes)/([^/\s\"'`]+)")
@@ -104,17 +123,28 @@ def filename_categories(name: str):
     path = PurePosixPath(name)
     directories = {part.lower() for part in path.parts[:-1]}
     basename = path.name.lower()
+    suffix = path.suffix.lower()
     if directories & INTERNAL_DIRECTORIES or basename in {"plan.md", "verification.md", "agents.md"}:
         yield "internal-notes"
-    elif path.suffix.lower() == ".md" and name not in PUBLIC_MARKDOWN:
+    elif suffix == ".md" and name not in PUBLIC_MARKDOWN:
         yield "markdown-not-in-public-allowlist"
-    if directories & DATA_DIRECTORIES or basename in {"source_inventory.json", "source_manifest.json"} or path.suffix.lower() in DATA_SUFFIXES:
+    if (directories & LOCAL_DIRECTORIES or any(part.endswith(".egg-info") for part in directories)
+            or basename in {".ds_store", ".coverage"} or basename.startswith(".coverage.")
+            or suffix in {".pyc", ".pyo", ".pyd"}):
+        yield "local-development-file"
+    if suffix in FONT_SUFFIXES:
+        yield "vendored-font"
+    if suffix in ARTIFACT_SUFFIXES and name not in PUBLIC_ARTIFACTS:
+        yield "artifact-not-in-public-allowlist"
+    if directories & DATA_DIRECTORIES or basename in {"source_inventory.json", "source_manifest.json"} or suffix in DATA_SUFFIXES:
         yield "dataset-or-generated-data"
-    if path.suffix.lower() in MEDIA_SUFFIXES and name not in PUBLIC_MEDIA:
+    if suffix in MEDIA_SUFFIXES and name not in PUBLIC_MEDIA:
         yield "source-media-or-archive"
     env_file = basename == ".env" or basename.startswith(".env.")
     credential_variant = basename.startswith(("credentials.", "secrets."))
-    if env_file or credential_variant or basename in CREDENTIAL_NAMES or path.suffix.lower() in {".pem", ".key", ".p12", ".pfx"}:
+    ssh_key = any(basename == key or basename.startswith(key + ".") for key in SSH_KEY_NAMES)
+    if (directories & CREDENTIAL_DIRECTORIES or env_file or credential_variant or ssh_key
+            or basename in CREDENTIAL_NAMES or suffix in CREDENTIAL_SUFFIXES):
         yield "credential-file"
 
 
@@ -128,13 +158,17 @@ def findings(name: str, content: bytes):
     for category in filename_categories(name):
         yield 1, category
     if b"\0" in content:
+        if name not in PUBLIC_MEDIA:
+            yield 1, "binary-not-in-public-allowlist"
         return
     try:
         text = content.decode("utf-8")
     except UnicodeDecodeError:
+        if name not in PUBLIC_MEDIA:
+            yield 1, "binary-not-in-public-allowlist"
         return
     for number, line in enumerate(text.splitlines(), 1):
-        if name != UPSTREAM_FONT_LICENSE and any(not allowed_email_domain(match.group(1)) for match in EMAIL.finditer(line)):
+        if any(not allowed_email_domain(match.group(1)) for match in EMAIL.finditer(line)):
             yield number, "personal-email"
         if any(match.group(1).lower() not in GENERIC_PATH_COMPONENTS for match in MACHINE_PATH.finditer(line)):
             yield number, "machine-specific-path"

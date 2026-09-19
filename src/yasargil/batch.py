@@ -15,7 +15,7 @@ from pathlib import Path
 from .checkpoint import atomic_json, directory_lock, durable_mkdir
 from .contract import require, sha256_file
 from .enhancement import EnhancementConfig, enhance_sospine, enhancement_protocol_fingerprint
-from .ollama import OllamaClient
+from .llama_cpp import LlamaCppClient, MEDGEMMA_MODEL, QWEN_MODEL
 
 
 @dataclass(frozen=True)
@@ -26,8 +26,8 @@ class BatchConfig:
     search_frames: int = 4
     max_frames: int = 8
     max_rounds: int = 1
-    qwen_model: str = "qwen3.8:27b-q4_K_M"
-    medgemma_model: str = "medgemma:27b"
+    qwen_model: str = QWEN_MODEL
+    medgemma_model: str = MEDGEMMA_MODEL
     num_ctx: int = 65536
     num_predict: int = 4096
     seed: int = 42
@@ -78,7 +78,7 @@ def plan_batch(dataset_root, config):
     return {"batch_version": 1, "dataset_root": str(root),
             "config": json.loads(json.dumps(asdict(config))), "frame_counts": counts,
             "total_frames": sum(counts.values()), "total_windows": len(windows), "windows": windows,
-            "transport": "ollama_ordered_images", "native_video_processor": False,
+            "transport": "llama_cpp_ordered_images", "native_video_processor": False,
             "cross_window_context": False, "overlap_indices": 0,
             "minimum_model_calls": len(windows) * 3,
             "maximum_model_calls": len(windows) * (3 + 2 * config.max_rounds),
@@ -99,7 +99,8 @@ def _source_hashes(root, plan):
 
 
 def _identity(info):
-    return {key: info[key] for key in ("name", "digest", "quantization", "runtime_version")}
+    return {key: info[key] for key in ("name", "digest", "quantization", "runtime_version",
+                                      "runtime", "model_file", "projector_file", "runtime_binary")}
 
 
 class _PinnedClient:
@@ -109,7 +110,7 @@ class _PinnedClient:
     def model_info(self, name):
         info = self.client.model_info(name)
         require(_identity(info) == self.identities[name],
-                f"Model or Ollama runtime changed during this batch: {name}; restore the pinned version")
+                f"Model or llama.cpp runtime changed during this batch: {name}; restore the pinned version")
         return info
 
     def chat_raw(self, request):
@@ -141,6 +142,8 @@ def enhance_batch(dataset_root, output_dir, config, *, client=None, progress=Non
         manifest_path = destination / "batch.json"
         if resume:
             saved = _json(manifest_path)
+            require(saved.get("plan", {}).get("transport") == "llama_cpp_ordered_images",
+                    "Resume rejected: legacy Ollama jobs are read-only; start a new llama.cpp batch")
             require(saved["plan"] == plan, "Batch settings or source sequence inventory changed; restore the original inputs")
             require(saved["source_hashes"] == _source_hashes(root, plan),
                     "Batch source bytes changed; restore the original source snapshot")
@@ -176,7 +179,7 @@ def enhance_batch(dataset_root, output_dir, config, *, client=None, progress=Non
 
         try:
             report("Verifying source snapshot and model identities")
-            client = client or OllamaClient()
+            client = client or LlamaCppClient()
             models_path = destination / "models.json"
             metadata = {name: client.model_info(name) for name in (config.qwen_model, config.medgemma_model)}
             identities = {name: _identity(info) for name, info in metadata.items()}
@@ -245,7 +248,7 @@ def request_pause(output_dir):
 
 
 def enhancement_status(output_dir):
-    """Read saved status even while the source drive or Ollama is unavailable."""
+    """Read saved status even while the source drive or llama.cpp is unavailable."""
     from .checkpoint import directory_is_locked
     destination = Path(output_dir)
     require(destination.is_dir() and not destination.is_symlink(), "Missing or unsafe enhancement directory")

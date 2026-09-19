@@ -22,7 +22,7 @@ from .medgemma_surgery_contract import (
     SURGERY_SYSTEM, build_surgery_evidence, build_surgery_reviews,
     surgery_schema, target_evidence,
 )
-from .ollama import MEDGEMMA_MODEL, OllamaClient, OllamaError, _object, encode_request
+from .llama_cpp import MEDGEMMA_MODEL, LlamaCppClient, LlamaCppError, _object, build_chat_request, encode_request
 from .smart_selection import verify_assets
 
 
@@ -48,7 +48,7 @@ class SurgeryReviewConfig:
 
 
 def _protocol_hash():
-    return canonical_hash({"version": PROTOCOL_VERSION, "system": SURGERY_SYSTEM,
+    return canonical_hash({"version": PROTOCOL_VERSION, "runtime": "llama.cpp", "transport": "openai-chat-v1", "system": SURGERY_SYSTEM,
                            "schema": surgery_schema(["first", "second"], 1000),
                            "evidence_policy": "all_final_selected_images_once_no_neighbor_expansion",
                            "prompt_layout": "shared_metadata_and_drafts_with_explicit_temporal_audit_v2"})
@@ -122,7 +122,7 @@ def _prepare(annotation_run, output, config, dataset_root):
             atomic_json(output / name, target_evidence(batch, frame_id))
             hashes[name] = sha256_file(output / name)
             evidence_files.append(name)
-        plan = {"schema_version": PROTOCOL_VERSION, "created_at": _now(), "review_unit": "surgery",
+        plan = {"schema_version": PROTOCOL_VERSION, "runtime": "llama.cpp", "created_at": _now(), "review_unit": "surgery",
                 "annotation_run": str(parent), "dataset_root": str(dataset_root) if dataset_root else None,
                 "config": asdict(config), "protocol_sha256": _protocol_hash(), "input_sha256": hashes,
                 "frame_ids": batch["target_frame_ids"], "evidence_files": evidence_files,
@@ -180,21 +180,21 @@ def build_request(batch, config):
         messages.append({"role": "user", "content": "Selected key-frame image: " + json.dumps(locator),
                          "images": [base64.b64encode(raw).decode("ascii")]})
     messages.append({"role": "user", "content": json.dumps(_prompt_context(batch), ensure_ascii=False)})
-    return {"model": config.medgemma_model, "messages": messages, "stream": False,
-            "format": surgery_schema(batch["target_frame_ids"], batch["media_timeline"]["duration_ms"]),
-            "options": {"temperature": 0, "seed": config.seed, "num_ctx": config.num_ctx,
-                        "num_predict": config.num_predict}}
+    return build_chat_request(config.medgemma_model, messages,
+        surgery_schema(batch["target_frame_ids"], batch["media_timeline"]["duration_ms"]),
+        num_ctx=config.num_ctx, num_predict=config.num_predict, seed=config.seed)
 
 
 def _parse(raw, batch, config):
     envelope = _object(raw, "MedGemma surgery review")
-    OllamaClient._validate_chat(envelope, config.medgemma_model)
-    require(not envelope["message"].get("tool_calls"), "MedGemma cannot dispatch tools")
-    count = envelope.get("prompt_eval_count")
+    LlamaCppClient._validate_chat(envelope, config.medgemma_model)
+    message = envelope["choices"][0]["message"]
+    require(not message.get("tool_calls"), "MedGemma cannot dispatch tools")
+    count = envelope.get("usage", {}).get("prompt_tokens")
     require(type(count) is int and 0 < count <= config.num_ctx - config.num_predict,
             "MedGemma prompt usage is unavailable or leaves insufficient answer capacity")
     try:
-        content = _strict_json(envelope["message"]["content"])
+        content = _strict_json(message["content"])
     except (ValueError, UnicodeError) as exc:
         raise ContractError(f"Invalid joint MedGemma response JSON: {exc}") from exc
     return {"schema_version": PROTOCOL_VERSION, "reviews": build_surgery_reviews(content, batch)}
@@ -232,7 +232,7 @@ def _call(output, batch, config, client_factory, *, allow_inference):
                 "Saved MedGemma identity differs from the pinned model")
         try:
             result = _parse((attempt / "response.json").read_bytes(), batch, config)
-        except (ContractError, OllamaError, ValueError):
+        except (ContractError, LlamaCppError, ValueError):
             require(not receipt, "Accepted joint MedGemma response is no longer valid")
             continue
         accepted.append((attempt, result))
@@ -246,10 +246,6 @@ def _call(output, batch, config, client_factory, *, allow_inference):
         metadata = client.model_info(config.medgemma_model)
         require(metadata.get("name") == config.medgemma_model and "vision" in metadata.get("capabilities", []),
                 "Surgery review requires the configured vision model")
-        info = metadata.get("show_response", {}).get("model_info", {})
-        declared = info.get("gemma3.context_length")
-        require(declared is None or type(declared) is int and config.num_ctx <= declared,
-                "Requested MedGemma context exceeds the installed model limit")
         pin = output / "model-info.json"
         if pin.exists():
             require(_identity(_read(pin)) == _identity(metadata), "Pinned MedGemma model or runtime changed")
@@ -322,6 +318,8 @@ def run_review(annotation_run, output_dir, config=None, *, dataset_root=None, re
         preserve_publication = bool(published and published.get("reviews")) or previous_summary.get("status") in {
             "completed", "completed_with_deferred_evidence"}
         try:
+            require(plan.get("runtime") == "llama.cpp",
+                    "This review predates the llama.cpp migration; start a new review directory")
             require(_read(output / "session.json")["run_sha256"] == sha256_file(output / "run.json"),
                     "Frozen surgery review plan changed")
             require(plan["schema_version"] == PROTOCOL_VERSION and plan["protocol_sha256"] == _protocol_hash(),
@@ -361,7 +359,7 @@ def run_review(annotation_run, output_dir, config=None, *, dataset_root=None, re
             def get_client():
                 nonlocal client
                 if client is None:
-                    client = OllamaClient(timeout=21600)
+                    client = LlamaCppClient(timeout=21600)
                 return client
             if not preserve_publication:
                 _publish(output, plan, [], "running")
@@ -406,7 +404,7 @@ def main():
     parser.add_argument("--dataset-root", type=Path)
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--prepare-only", action="store_true")
-    parser.add_argument("--ollama-url", default="http://127.0.0.1:11434")
+    parser.add_argument("--project-root", type=Path)
     parser.add_argument("--timeout", type=float, default=21600)
     for name, default in asdict(SurgeryReviewConfig()).items():
         if isinstance(default, bool):
@@ -424,7 +422,7 @@ def main():
     with cooperative_stop() as should_stop:
         summary = run_review(args.annotation_run, args.output_dir, config, dataset_root=args.dataset_root,
             resume=args.resume, prepare_only=args.prepare_only, should_stop=should_stop,
-            client=OllamaClient(args.ollama_url, timeout=args.timeout), progress=lambda message: print(message, flush=True))
+            client=LlamaCppClient(args.project_root, timeout=args.timeout), progress=lambda message: print(message, flush=True))
     print(json.dumps(summary, indent=2))
 
 

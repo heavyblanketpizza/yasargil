@@ -21,7 +21,7 @@ from .frame_annotation import AnnotationConfig, _verified_result
 from .llama_video import _strict_json
 from .medgemma_evidence import build_evidence
 from .medgemma_review_contract import REVIEW_SYSTEM, build_review, review_schema
-from .ollama import MEDGEMMA_MODEL, OllamaClient, OllamaError, _object, encode_request
+from .llama_cpp import MEDGEMMA_MODEL, LlamaCppClient, LlamaCppError, _object, build_chat_request, encode_request
 from .smart_selection import _image_blocks, verify_assets
 from .video_source import media_timeline
 
@@ -76,7 +76,7 @@ def _relative(root, name):
 
 
 def _protocol_hash():
-    return canonical_hash({"version": PROTOCOL_VERSION, "system": REVIEW_SYSTEM,
+    return canonical_hash({"version": PROTOCOL_VERSION, "runtime": "llama.cpp", "transport": "openai-chat-v1", "system": REVIEW_SYSTEM,
                            "schema": review_schema("target", ["target", "before", "after"], 1000)})
 
 
@@ -184,7 +184,7 @@ def _prepare(annotation_run, output, config, dataset_root):
             atomic_json(output / name, packet)
             hashes[name] = sha256_file(output / name)
             evidence_files.append(name)
-        plan = {"schema_version": PROTOCOL_VERSION, "created_at": _now(),
+        plan = {"schema_version": PROTOCOL_VERSION, "runtime": "llama.cpp", "created_at": _now(),
                 "annotation_run": str(parent), "dataset_root": str(dataset_root) if dataset_root else None,
                 "config": asdict(config), "protocol_sha256": _protocol_hash(), "input_sha256": hashes,
                 "frame_ids": [p["target_frame_id"] for p in packets], "evidence_files": evidence_files,
@@ -225,26 +225,28 @@ def build_request(evidence, config):
     context["qwen_annotation"] = qwen
     context["task"] = "Inspect the supplied evidence, then retain, correct or revise this key frame's Qwen annotation. Save unresolved evidence requests for later."
     messages.append({"role": "user", "content": json.dumps(context, ensure_ascii=False)})
-    return {"model": config.medgemma_model, "messages": messages, "stream": False,
-            "format": review_schema(evidence["target_frame_id"], [f["frame_id"] for f in evidence["frames"]],
-                                    evidence["media_timeline"]["duration_ms"]),
-            "options": {"temperature": 0, "seed": config.seed, "num_ctx": config.num_ctx,
-                        "num_predict": config.num_predict}}
+    return build_chat_request(config.medgemma_model, messages,
+        review_schema(evidence["target_frame_id"], [f["frame_id"] for f in evidence["frames"]],
+                      evidence["media_timeline"]["duration_ms"]),
+        num_ctx=config.num_ctx, num_predict=config.num_predict, seed=config.seed)
 
 
 def _identity(info):
-    return {key: info[key] for key in ("name", "digest", "quantization", "runtime_version")}
+    require(info.get("runtime") == "llama.cpp", "Review model identity is not from llama.cpp")
+    return {key: info[key] for key in ("name", "digest", "quantization", "runtime_version", "runtime",
+                                     "model_file", "projector_file", "runtime_binary", "binary_version")}
 
 
 def _parse(raw, evidence, config):
     envelope = _object(raw, "MedGemma review")
-    OllamaClient._validate_chat(envelope, config.medgemma_model)
-    require(not envelope["message"].get("tool_calls"), "MedGemma review cannot dispatch tools")
-    count = envelope.get("prompt_eval_count")
+    LlamaCppClient._validate_chat(envelope, config.medgemma_model)
+    message = envelope["choices"][0]["message"]
+    require(not message.get("tool_calls"), "MedGemma review cannot dispatch tools")
+    count = envelope.get("usage", {}).get("prompt_tokens")
     require(type(count) is int and 0 < count <= config.num_ctx - config.num_predict,
             "MedGemma prompt usage is unavailable or leaves insufficient context capacity")
     try:
-        content = _strict_json(envelope["message"]["content"])
+        content = _strict_json(message["content"])
     except (ValueError, UnicodeError) as exc:
         raise ContractError(f"Invalid MedGemma response JSON: {exc}") from exc
     return build_review(content, evidence)
@@ -282,7 +284,7 @@ def _call(output, index, evidence, config, client_factory, *, allow_inference=la
                 "Saved MedGemma model differs from the pinned model")
         try:
             review = _parse((attempt / "response.json").read_bytes(), evidence, config)
-        except (ContractError, OllamaError, ValueError):
+        except (ContractError, LlamaCppError, ValueError):
             require(not receipt, "Accepted MedGemma response is no longer valid")
             continue
         accepted.append((attempt, review))
@@ -358,6 +360,8 @@ def run_review(annotation_run, output_dir, config=None, *, dataset_root=None, re
         reviews = []
         validated = False
         try:
+            require(plan.get("runtime") == "llama.cpp",
+                    "This review predates the llama.cpp migration; start a new review directory")
             require(_read(output / "session.json")["run_sha256"] == sha256_file(output / "run.json"),
                     "Frozen review plan changed")
             require(plan["schema_version"] == PROTOCOL_VERSION and plan["protocol_sha256"] == _protocol_hash(),
@@ -383,7 +387,7 @@ def run_review(annotation_run, output_dir, config=None, *, dataset_root=None, re
             def get_client():
                 nonlocal client
                 if client is None:
-                    client = OllamaClient()
+                    client = LlamaCppClient()
                 return client
             for index, evidence in enumerate(packets):
                 _publish(output, plan, reviews, "running")
@@ -426,7 +430,7 @@ def add_review_parser(subparsers):
     parser.add_argument("--dataset-root", type=Path)
     parser.add_argument("--prepare-only", action="store_true")
     parser.add_argument("--resume", action="store_true")
-    parser.add_argument("--ollama-url", default="http://127.0.0.1:11434")
+    parser.add_argument("--project-root", type=Path)
     parser.add_argument("--timeout", type=float, default=600)
     for key, default in asdict(ReviewConfig()).items():
         parser.add_argument("--" + key.replace("_", "-"), type=type(default), default=None,
@@ -446,7 +450,7 @@ def review_cli(args, *, should_stop=lambda: False):
         config = ReviewConfig(**settings)
     result = run_review(args.annotation_run, args.output_dir, config, dataset_root=args.dataset_root,
                         resume=args.resume, prepare_only=args.prepare_only,
-                        client=OllamaClient(args.ollama_url, timeout=args.timeout), should_stop=should_stop,
+                        client=LlamaCppClient(args.project_root, timeout=args.timeout), should_stop=should_stop,
                         progress=lambda message: print(message, flush=True))
     print(json.dumps({"status": result["status"], "reviewed": result["reviewed_frame_count"],
                       "deferred": result["deferred_frame_count"],
