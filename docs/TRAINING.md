@@ -4,11 +4,17 @@ The active training interface is `yasargil.training.build_sft_trainer`. It accep
 
 The interface is independent of the enhancement record schema. The enhancement archive contains source facts, model proposals, review history, and provenance. Its training export contains ordinary ordered `messages` with typed text/image blocks and serialized assistant targets. The contract/export layer owns schema validation, review eligibility, media hashes, partition separation and image hydration. The trainer receives only that validated training view.
 
-The [Qwen–MedGemma loop](ENHANCEMENT.md) produces pending drafts and format previews. Model-generated inspection claims and turns require actual human surgeon or clinical-domain-expert review, including clinical appropriateness, before training eligibility; a model cannot avoid that gate by labeling its own claim a simple observation. The verified teacher adapter is necessary but insufficient. Completed-review ingestion and actual expert assessment remain pending; no command here converts a blank worksheet or successful model run into approval.
+[Independent MedGemma annotation](MEDGEMMA_FRAME_ANNOTATION.md) produces pending
+per-frame proposals, separate from the v2 training-export adapter. Historical
+enhancement archives remain verifiable. Model-generated inspection claims and
+turns require actual human surgeon or clinical-domain-expert review, including
+clinical appropriateness, before training eligibility. Completed-review ingestion
+and an export adapter for the new independent annotation records remain pending;
+no command converts inference completion or a blank worksheet into approval.
 
 ## Prepare the training environment
 
-Install the locked core project with `uv sync --frozen` and use `uv run yasargil` for source import, enhancement, validation and export. `.python-version` selects Python 3.12. The core lock does not install or validate PyTorch, Unsloth, a GPU stack or model weights; choose and freeze the training environment separately using the compatibility constraints below.
+Install the locked core project with `uv sync --frozen` and use `uv run yasargil` for source import, annotation, validation and export. `.python-version` selects Python 3.12. The core lock does not install or validate PyTorch, Unsloth, a GPU stack or model weights; choose and freeze the training environment separately using the compatibility constraints below.
 
 Use the intended HF training checkpoint and matching processor revision. A llama.cpp GGUF model/projector pair is an inference artifact; do not pass its alias or GGUF file to this trainer. Configure model loading, PEFT/trainable layers, image resolution, frame count and device placement before constructing the trainer. The helper does not choose or download a checkpoint.
 

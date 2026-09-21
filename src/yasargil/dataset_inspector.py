@@ -32,7 +32,8 @@ _ANNOTATION = "full-video-frame-annotation-v1"
 _ANNOTATION_SCHEMAS = {_ANNOTATION, "full-video-frame-annotation-v2"}
 _REVIEW = "medgemma-frame-review-v1"
 _REVIEW_SCHEMAS = {_REVIEW, "medgemma-surgery-review-v1"}
-_SCHEMAS = {_SELECTION, *_ANNOTATION_SCHEMAS, *_REVIEW_SCHEMAS}
+_MEDGEMMA_ANNOTATION = "medgemma-frame-annotation-v1"
+_SCHEMAS = {_SELECTION, *_ANNOTATION_SCHEMAS, *_REVIEW_SCHEMAS, _MEDGEMMA_ANNOTATION}
 _CASE = re.compile(r"(?:S[1-8]A[1-3]|Clip[01])")
 _IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".tif", ".tiff"}
 _VIDEO_SUFFIXES = {".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v"}
@@ -73,6 +74,10 @@ def _digest(path):
 
 def _same_path(value, path):
     return isinstance(value, str) and Path(value).is_absolute() and Path(value).resolve() == path.resolve()
+
+
+def _path_from_absolute(value):
+    return Path(value) if isinstance(value, str) and Path(value).is_absolute() else None
 
 
 def _same_source(left, right):
@@ -659,8 +664,137 @@ class InspectorStore:
         if result_name:
             names.append(("Saved results", result_name))
         return {"path": str(root), "name": root.name, "created_at": plan.get("created_at"),
+                "schema_version": plan.get("schema_version"),
                 "status": summary.get("status", "prepared"), "config": plan.get("config", {}),
                 "artifacts": self._artifacts(root, names)}
+
+    def _independent_annotations(self, root, source, selection, runs):
+        """Join independent annotations directly to their selection provenance."""
+        from .medgemma_annotation_contract import build_annotation
+        from .medgemma_annotation_evidence import canonical_frame
+
+        canonical = {frame["frame_id"]: canonical_frame(frame) for frame in source["frames"]}
+        selected = set(selection.get("selected_frame_ids", []))
+
+        def saved_path(child, value):
+            if not isinstance(value, str) or not value:
+                return None
+            relative = Path(value)
+            path = child / relative
+            if relative.is_absolute() or ".." in relative.parts or not path.resolve().is_relative_to(child.resolve()):
+                return None
+            return path
+
+        def pinned_hash(path):
+            # Frozen selection requests can embed a full video. Reuse the
+            # streaming, stat-keyed cache instead of rereading them into RAM on
+            # every inspector refresh.
+            try:
+                return self._verified_hash(path)
+            except PreviewError:
+                return None
+
+        matching = []
+        for child, plan in runs:
+            if plan.get("schema_version") != _MEDGEMMA_ANNOTATION or not _same_path(plan.get("selection_run"), root):
+                continue
+            source_path = saved_path(child, plan.get("source_file"))
+            copied = _read(source_path) if source_path else None
+            selected_path = saved_path(child, plan.get("selected_file"))
+            copied_selected = _read(selected_path) if selected_path else None
+            hashes = plan.get("input_sha256", {})
+            same_source = (isinstance(copied, dict)
+                and all(copied.get(key) == source.get(key) for key in
+                        ("source_sha256", "video_sha256", "source_kind", "duration_ms", "timestamp_basis"))
+                and [canonical_frame(row) for row in _objects(copied, "frames")] == list(canonical.values()))
+            pinned_ok = isinstance(hashes, dict) and all(name in hashes for name in
+                [plan.get("source_file"), plan.get("selected_file"), *plan.get("evidence_files", [])]) and all(
+                saved_path(child, name) is not None and pinned_hash(saved_path(child, name)) == digest
+                for name, digest in hashes.items())
+            selected_ok = (isinstance(copied_selected, list) and copied_selected
+                and all(isinstance(row, dict) and row.get("frame_id") in selected
+                        and canonical_frame(row) == canonical.get(row["frame_id"]) for row in copied_selected)
+                and [row["frame_id"] for row in copied_selected] == plan.get("frame_ids"))
+            selection_digest = hashes.get("selection/selection.json") if isinstance(hashes, dict) else None
+            if (not same_source or not pinned_ok or not selected_ok
+                    or (selection_digest and selection_digest != _digest(root / "selection.json"))):
+                self._warn(f"Skipped independent MedGemma annotation with mismatched selection/source lineage: {child}")
+                continue
+            matching.append((child, plan))
+        if not matching:
+            return None, {}, {}, []
+        child, plan = matching[0]
+        target_ids = set(plan.get("frame_ids", []))
+        annotations, packets = {}, {}
+
+        def valid_packet(packet):
+            if not isinstance(packet, dict) or packet.get("schema_version") != "medgemma-annotation-evidence-v1":
+                return False
+            target = packet.get("target_frame_id")
+            frames, views = packet.get("frames"), packet.get("views")
+            if (target not in target_ids or target not in canonical
+                    or packet.get("target") != canonical[target]
+                    or not isinstance(frames, list) or not frames or not isinstance(views, list) or not views
+                    or not all(isinstance(frame, dict) and frame.get("frame_id") in canonical
+                               and frame == canonical[frame["frame_id"]] for frame in frames)):
+                return False
+            frame_ids = {frame["frame_id"] for frame in frames}
+            if len(frame_ids) != len(frames):
+                return False
+            seen = set()
+            for view in views:
+                if (not isinstance(view, dict) or not isinstance(view.get("view_id"), str)
+                        or view["view_id"] in seen or view.get("frame_id") not in frame_ids
+                        or view.get("role") not in {"target", "target_detail", "context_before", "context_after"}):
+                    return False
+                seen.add(view["view_id"])
+                frame = canonical[view["frame_id"]]
+                if (view["role"] in {"target", "target_detail"}) != (view["frame_id"] == target):
+                    return False
+                bounds = view.get("bounds")
+                if (not isinstance(bounds, list) or len(bounds) != 4 or any(type(value) is not int for value in bounds)
+                        or not 0 <= bounds[0] < bounds[2] <= frame["width"]
+                        or not 0 <= bounds[1] < bounds[3] <= frame["height"]
+                        or view.get("width") != bounds[2] - bounds[0] or view.get("height") != bounds[3] - bounds[1]):
+                    return False
+                if (view["role"] == "context_before" and frame["frame_index"] >= canonical[target]["frame_index"]
+                        or view["role"] == "context_after" and frame["frame_index"] <= canonical[target]["frame_index"]):
+                    return False
+                if view["role"] != "target_detail" and any(view.get(key) != frame.get(key)
+                        for key in ("image_path", "image_sha256", "width", "height")):
+                    return False
+                if view["role"] == "target_detail":
+                    crop_path = _path_from_absolute(view.get("image_path"))
+                    if (crop_path is None or not crop_path.resolve().is_relative_to(child.resolve())
+                            or _digest(crop_path) != view.get("image_sha256")):
+                        return False
+            return target in frame_ids and sum(view["role"] == "target" for view in views) == 1
+
+        for filename in plan.get("evidence_files", []):
+            path = saved_path(child, filename)
+            packet = _read(path) if path else None
+            if valid_packet(packet):
+                packets[packet["target_frame_id"]] = packet
+        document = _read(child / "annotations.json")
+        if isinstance(document, dict) and document.get("schema_version") == _MEDGEMMA_ANNOTATION:
+            for row in _objects(document, "annotations"):
+                target, annotation, packet = row.get("target_frame_id"), row.get("annotation"), row.get("evidence")
+                if (target in packets and packet == packets[target] and row.get("target") == canonical.get(target)
+                        and isinstance(annotation, dict) and annotation.get("schema_version") == _MEDGEMMA_ANNOTATION
+                        and annotation.get("target_frame_id") == target):
+                    raw = {key: annotation.get(key) for key in ("target_frame_id", "visibility", "unresolved_questions")}
+                    raw["claims"] = [{key: value for key, value in claim.items() if key != "evidence_frame_ids"}
+                                     for claim in _objects(annotation, "claims")]
+                    try:
+                        if build_annotation(raw, packet) != annotation:
+                            raise ValueError("Derived annotation differs from saved claims")
+                    except ValueError:
+                        self._warn(f"Skipped independent MedGemma annotation with invalid claims: {child}")
+                        continue
+                    annotations[target] = row
+                else:
+                    self._warn(f"Skipped independent MedGemma annotation with mismatched frame evidence: {child}")
+        return (child, plan), annotations, packets, matching
 
     def refresh(self):
         with self._lock:
@@ -720,6 +854,14 @@ class InspectorStore:
                                        "image_url": self._register(canonical.get("image_path"), "image")})
                     annotation_run, qwen, annotation_runs = self._annotations(root, source, selection, runs)
                     review_run, medgemma, evidence, review_runs = self._reviews(annotation_run, source, qwen, runs)
+                    independent_run, independent, independent_evidence, independent_runs = self._independent_annotations(
+                        root, source, selection, runs)
+                    historical_review_runs = review_runs
+                    independent_active = independent_run is not None
+                    if independent_active:
+                        review_run, medgemma, evidence, review_runs = (
+                            independent_run, independent, independent_evidence, independent_runs)
+                    medgemma_result = "annotations.json" if independent_active else "reviews.json"
                     outcomes, labels, availability = self._dataset(source)
                     case = Path(source.get("source_path", str(root))).stem
                     record_id = hashlib.sha256(str(root).encode()).hexdigest()[:16]
@@ -731,7 +873,7 @@ class InspectorStore:
                                 "qwen_sha256": _digest(annotation_run[0] / "annotations.json") if annotation_run else None,
                                 "qwen_draft_sha256": review_run[1].get("input_sha256", {}).get("qwen-drafts.json") if review_run else None,
                                 "medgemma_run": str(review_run[0]) if review_run else None,
-                                "medgemma_sha256": _digest(review_run[0] / "reviews.json") if review_run else None,
+                                "medgemma_sha256": _digest(review_run[0] / medgemma_result) if review_run else None,
                                 "outcomes": outcomes,
                                 "source_annotation_sha256": sorted({row["source_locator"]["sha256"]
                                     for rows in labels.values() for row in rows})}
@@ -741,7 +883,10 @@ class InspectorStore:
                                "frame_count": len(frames), "duration_ms": source["duration_ms"],
                                "selected_count": sum(row["status"] == "selected" for row in frames),
                                "dropped_count": sum(row["status"] == "dropped" for row in frames),
-                               "qwen_annotation_count": len(qwen), "medgemma_review_count": len(medgemma),
+                               "qwen_annotation_count": len(qwen),
+                               "medgemma_annotation_count": len(medgemma) if independent_active else 0,
+                               "medgemma_review_count": 0 if independent_active else len(medgemma),
+                               "medgemma_protocol": review_run[1].get("schema_version") if review_run else None,
                                "status": selection.get("status", "prepared"),
                                "timestamp_basis": source.get("timestamp_basis", frames[0].get("timestamp_basis")),
                                "run_name": root.name,
@@ -761,7 +906,10 @@ class InspectorStore:
                     if annotation_run:
                         artifacts += self._artifacts(annotation_run[0], [("Qwen annotations", "annotations.json"),
                             ("Qwen raw response", "round-00/response.json")])
-                    if review_run:
+                    if independent_active:
+                        artifacts += self._artifacts(review_run[0], [("Independent MedGemma annotations", "annotations.json"),
+                            ("MedGemma source inventory", "source.json"), ("MedGemma selected targets", "selected-frames.json")])
+                    elif review_run:
                         artifacts += self._artifacts(review_run[0], [("MedGemma reviews", "reviews.json"),
                             ("Qwen timestamp validation issues", "draft-intake.json"),
                             ("Preserved Qwen drafts with validation flags", "qwen-drafts.json"),
@@ -772,13 +920,14 @@ class InspectorStore:
                               "outcomes": outcomes, "metadata": metadata, "artifacts": artifacts,
                               "runs": {"selection": self._run_info((root, plan), "selection.json"),
                                        "qwen": self._run_info(annotation_run, "annotations.json"),
-                                       "medgemma": self._run_info(review_run, "reviews.json"),
+                                       "medgemma": self._run_info(review_run, medgemma_result),
                                        "qwen_history": [self._run_info(pair, "annotations.json") for pair in annotation_runs],
-                                       "medgemma_history": [self._run_info(pair, "reviews.json") for pair in review_runs]}}
+                                       "medgemma_history": [self._run_info(pair, medgemma_result) for pair in review_runs],
+                                       "historical_medgemma_reviews": [self._run_info(pair, "reviews.json") for pair in historical_review_runs]}}
                     records[record_id] = {"summary": summary, "public": public, "canonical": source["frames"],
                         "selection": selection, "decisions": decisions, "qwen": qwen, "medgemma": medgemma,
                         "evidence": evidence, "labels": labels, "availability": availability,
-                        "review_run": review_run}
+                        "review_run": review_run, "independent_active": independent_active}
                 except (OSError, ValueError, TypeError, KeyError) as exc:
                     self._warn(f"Could not load incomplete run {root}: {exc}")
             self._records = records
@@ -906,7 +1055,7 @@ class InspectorStore:
                             "runs": {name: item["public"]["runs"][name]["path"] if item["public"]["runs"][name]
                                      else None for name in ("selection", "qwen", "medgemma")},
                             "original_annotations": {"qwen": copy.deepcopy(item["qwen"].get(frame_id)),
-                                "medgemma": copy.deepcopy(review.get("medgemma_review")) if review else None}}}
+                                "medgemma": copy.deepcopy(review.get("annotation", review.get("medgemma_review"))) if review else None}}}
                 if action == "edit":
                     if saved["deleted"]:
                         raise CurationError("Restore this enhancement before editing it.", 409)
@@ -935,8 +1084,11 @@ class InspectorStore:
             packet = item["evidence"].get(frame_id)
             evidence = []
             if packet:
-                for frame in packet["frames"]:
-                    evidence.append({**frame, "roles": frame.get("evidence_roles", []),
+                canonical_frames = {frame["frame_id"]: frame for frame in packet["frames"]}
+                for frame in packet.get("views", packet["frames"]):
+                    source_frame = canonical_frames.get(frame.get("frame_id"), {})
+                    evidence.append({**source_frame, **frame,
+                                     "roles": [frame["role"]] if frame.get("role") else frame.get("evidence_roles", []),
                                      "image_url": self._register(frame.get("image_path"), "image")})
             artifacts = []
             if review and item["review_run"] and isinstance(review.get("call_directory"), str):
@@ -944,18 +1096,20 @@ class InspectorStore:
                 artifacts = self._artifacts(item["review_run"][0], [
                     ("Exact MedGemma request", call + "/request.json"),
                     ("Complete MedGemma response", call + "/response.json"),
-                    ("MedGemma review", call + "/review.json"), ("MedGemma model output", call + "/model.json")])
+                    ("MedGemma annotation", call + "/annotation.json"),
+                    ("Historical MedGemma review", call + "/review.json"), ("MedGemma model output", call + "/model.json")])
             canonical = item["canonical"][target["frame_index"]]
             curation = self._curation(item, frame_id)
             return copy.deepcopy({"frame": {**target, "curation": curation}, "qwen": item["qwen"].get(frame_id),
                 "curation": curation,
-                "medgemma": review.get("medgemma_review") if review else None, "evidence": evidence,
+                "medgemma": review.get("annotation", review.get("medgemma_review")) if review else None,
+                "medgemma_protocol": item["public"].get("medgemma_protocol"), "evidence": evidence,
                 "original_annotations": item["labels"].get(frame_id, []),
                 "label_availability": item["availability"].get(frame_id, []),
                 "outcomes": item["public"]["outcomes"], "provenance": canonical,
                 "dataset_context": packet.get("dataset_context") if packet else None,
                 "evidence_context": {key: value for key, value in packet.items()
-                                     if key not in {"frames", "qwen_annotation", "dataset_context"}} if packet else None,
+                                     if key not in {"frames", "views", "qwen_annotation", "dataset_context"}} if packet else None,
                 "raw": {"selection": item["decisions"].get(frame_id), "qwen": item["qwen"].get(frame_id),
                         "medgemma": review}, "artifacts": artifacts})
 

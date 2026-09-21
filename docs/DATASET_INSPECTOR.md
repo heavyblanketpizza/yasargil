@@ -8,8 +8,8 @@ Run the local inspector from the repository:
 
 Open **http://127.0.0.1:8765**. Use `--port` to choose another local port and
 `--runs-root` to inspect a different output directory. The default is `outputs`.
-The inspector reads saved selection, Qwen annotation, and MedGemma review runs;
-it does not start inference. Refresh discovers newly saved work.
+The inspector reads saved selections, independent MedGemma annotations, optional
+Qwen baseline annotations, and historical MedGemma reviews. It does not start inference. Refresh discovers newly saved work.
 
 Links from another app or website may open the inspector home page. The server
 allows top-level navigation to that static page while retaining same-origin
@@ -64,32 +64,40 @@ to the still view with an error; loading also has a bounded timeout.
 
 ## Read attached evidence
 
-Selected and Qwen-dropped frames show an annotation comparison with **Video-native
-model** (Qwen) on the left and **Domain-specialist model** (MedGemma) on the right,
-with **Human review** below both. These are role labels: Qwen accepts native video
-input; MedGemma specializes in medical text and images. The model names remain
-visible, and the labels do not imply adaptation during review. Other
-source frames and undecided candidates show only **Human review** and **Frame
-source data**, with no empty AI annotation section or supporting-evidence strip.
-The comparison includes Qwen's selection reason and generated draft alongside
-MedGemma's saved revision, contextual claims, uncertainties, corrections, and
-deferred evidence requests. On narrow
-screens the model sections stack. Evidence-time links jump to cited source frames.
-Prepared review evidence is labeled separately from evidence in a saved MedGemma
-response. Missing or pending annotations are never filled with generated content.
-Qwen and MedGemma's additions are labeled **AI-generated annotations**. Model
-annotations, original dataset fields, and human notes use black or gray text;
-labels identify their origin. The interface uses Meslo when installed locally,
-with a system monospace fallback. Font files are not bundled or downloaded.
+Selected frames show **Independent MedGemma annotation** when a matching new run
+exists. This result attaches directly to its selection; no Qwen annotation is
+required. An independent result takes precedence over historical MedGemma review
+results for the same selection. A Qwen annotation block appears when a saved
+Qwen baseline exists. Original source frames and human review remain available
+when no model annotation has been saved.
 
-Qwen writes the descriptive observations, video-context claims, and uncertainty
-from the complete supplied video and selected stills. Its full-video annotation
-request does not include the original SOSpine CSV labels. The current MedGemma
-review receives all selected stills together with those Qwen drafts and matching
-source CSV labels in one surgery request. The saved legacy per-frame protocol
-instead includes a target and bounded surrounding stills. Neither MedGemma
-protocol receives the complete native video; the displayed saved evidence
-identifies the images actually supplied. See [review protocols](MEDGEMMA_FRAME_REVIEW.md).
+The independent annotation separates **target-visible** claims from
+**context-supported** interpretations. Each claim shows its category, statement,
+evidence-view links, and specific uncertainty. Unresolved questions identify the
+missing evidence. Thumbnails show the full target, its deterministic detail crops,
+and nearby source observations; crop bounds identify the original pixels. Crops
+are views of one observation, not extra temporal observations. Evidence links
+resolve to the images actually supplied, not to a model's invented timestamp.
+
+Saved older outputs are marked **HISTORICAL REVIEW** and retain their original
+Qwen comparison, revisions, corrections, and deferred evidence fields. They are
+not relabeled as independent annotation. Missing or pending annotations are never
+filled with generated content. Exact request, response, annotation, and model
+artifacts are accessible from the frame's source data.
+
+Model additions are labeled **AI-generated annotations**. Original dataset fields
+and human notes retain their separate origins. The interface uses Meslo when
+installed locally, with a system monospace fallback; fonts are not downloaded.
+
+Current MedGemma input contains source images, nearby observations, optional
+target crops, and documented procedure context. It excludes Qwen prose, source
+CSV labels, outcomes, and surgeon experience. Source labels and outcomes visible
+in this inspector are retrospective information for the human reviewer; they are
+not evidence that the current model received them. The separate Qwen baseline
+uses the complete video. Historical MedGemma review packets had different inputs,
+including Qwen drafts and matching source labels. See
+[independent annotation](MEDGEMMA_FRAME_ANNOTATION.md) and
+[historical review protocols](MEDGEMMA_FRAME_REVIEW.md).
 
 ## Edit or remove an enhancement
 

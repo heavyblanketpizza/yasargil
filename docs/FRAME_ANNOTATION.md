@@ -1,4 +1,4 @@
-# Frame annotation with complete video context
+# Qwen annotation with complete video context
 
 This pass annotates the final frames from a completed `select-video-frames` run.
 It starts a fresh local Qwen session with the **complete native video and all
@@ -19,22 +19,18 @@ This Qwen request receives the video, selected stills, and documented procedure
 background; it does not receive those CSV rows. Software attaches the source
 filenames, timestamps, hashes, and supporting-frame records to Qwen's output.
 
-After this pass finishes, the current [MedGemma review](MEDGEMMA_FRAME_REVIEW.md)
-assesses all selected stills and their Qwen drafts together with original dataset
-instrument labels and coordinates in one request. It does not automatically
-include neighboring or Qwen-cited supporting frames. Its further evidence requests are saved for later;
-that stage does not dispatch Qwen or TimeLens2 searches. See the
-[research status](../README.md#research-status-and-known-limitations) for observed
-temporal-citation failures and the review protocol's unproven added value.
+This is a separate Qwen annotation baseline. The current
+[MedGemma annotation](MEDGEMMA_FRAME_ANNOTATION.md) starts directly from the same
+selection and independently inspects source images. It neither waits for nor
+receives this Qwen draft. The former Qwen-to-MedGemma review runners have been
+removed; their saved outputs remain historical evidence.
 
 ## Run it
 
 Use the same local llama.cpp and Qwen installation as
 [complete-video frame selection](SMART_FRAME_SELECTION.md). This command consumes
 an existing final selection; it does not rerun the embedding selector.
-The full-video path already uses llama.cpp; see the
-[runtime migration status](LLAMA_CPP.md#migration-from-ollama) for the separate
-enhancement and MedGemma paths formerly using Ollama.
+See [runtime setup and migration history](LLAMA_CPP.md#migration-from-ollama).
 
 Prepare a new annotation run without starting Qwen:
 

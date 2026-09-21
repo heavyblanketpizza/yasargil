@@ -28,6 +28,7 @@ PUBLIC_MARKDOWN = {
     "docs/FRAME_ANNOTATION.md",
     "docs/GAP_EXPERIMENT.md",
     "docs/LLAMA_CPP.md",
+    "docs/MEDGEMMA_FRAME_ANNOTATION.md",
     "docs/MEDGEMMA_FRAME_REVIEW.md",
     "docs/REVIEW_AND_EVALUATION.md",
     "docs/SELECTION_BATCH.md",

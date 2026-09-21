@@ -3,8 +3,9 @@
 ![Yasargil workflow: surgery, frame selection, annotation, review, and training.](docs/assets/yasargil-banner.webp)
 
 Yasargil turns surgical images into draft annotations and multimodal training
-conversations. Qwen writes the drafts, MedGemma reviews them, and each run saves
-the source evidence and model responses for human review.
+conversations. Qwen helps select frames from the video. MedGemma independently
+annotates each selected frame from source images, and each run saves the evidence
+and model responses for human review.
 
 The first supported dataset is **SOSpine**, images of simulated spinal durotomy
 repair on cadavers. Original tool labels and coordinates stay separate from new
@@ -35,9 +36,11 @@ Datasets, model weights, and the inference runtime are not bundled.
 
 ## Choose a workflow
 
-**Video selection and annotation:** DINO proposes candidate frames. Qwen keeps or
-drops candidates using the complete video, then a separate pass annotates the
-selected frames. MedGemma reviews the selected stills and drafts.
+**Select, then annotate:** DINO proposes candidate frames and Qwen keeps or
+drops candidates using the complete video. MedGemma then authors a separate
+annotation for each selected frame using that image, nearby source frames, and
+optional detail crops. Its annotation input contains no Qwen draft or original
+CSV labels.
 
 Install the [DINO weights](docs/SMART_FRAME_SELECTION.md#encoder-setup-and-selection),
 then select frames from a video:
@@ -49,31 +52,28 @@ uv run --extra selection yasargil select-video-frames \
   --output-dir outputs/selection-example
 ```
 
-Open the generated `selection.html` to review the selection. Follow the guides for
-[SOSpine image sequences](docs/SMART_FRAME_SELECTION.md),
-[annotation](docs/FRAME_ANNOTATION.md), and
-[MedGemma review](docs/MEDGEMMA_FRAME_REVIEW.md).
-
-**Bounded enhancement:** Qwen and MedGemma inspect a small window of SOSpine
-images and original CSV labels, requesting more frames within set budgets.
-This is a separate workflow from video annotation.
+Prepare the independent annotation packets, then run them:
 
 ```bash
-uv run yasargil enhance-sospine \
-  --dataset-root '/path/to/datasets/SOSpine' \
-  --case-id S1A2 --start-index 1 --cutoff-index 12 \
-  --initial-frames 4 --search-frames 4 --max-frames 8 \
-  --output-dir outputs/enhancement-example
+uv run yasargil annotate-selected-frames \
+  --selection-run outputs/selection-example \
+  --output-dir outputs/medgemma-annotation-example --prepare-only
+
+uv run yasargil annotate-selected-frames \
+  --output-dir outputs/medgemma-annotation-example --resume
 ```
 
-Use a new output directory outside the source dataset. Add `--dry-run` to preview
-without writes or model calls. A completed run saves an evidence archive, model
-requests and responses, and a human-review packet. See the
-[enhancement guide](docs/ENHANCEMENT.md) for batch runs and pause/resume.
+Use a new output directory outside the source dataset. See
+[MedGemma annotation](docs/MEDGEMMA_FRAME_ANNOTATION.md) for evidence, output,
+pause/resume, and evaluation. The separate
+[Qwen full-video annotation](docs/FRAME_ANNOTATION.md) remains available as a
+comparison; it is not a prerequisite or input to MedGemma. The former Qwen-to-MedGemma
+review and bounded enhancement runners have been removed. Saved historical
+artifacts remain available for inspection and verification.
 
 ## Inspect saved results
 
-For saved video selections, annotations, and MedGemma reviews:
+For saved video selections, independent annotations, and historical reviews:
 
 ```bash
 uv run yasargil inspect-dataset
@@ -86,8 +86,8 @@ for review notes and exports.
 ## Research status and known limitations
 
 - Generated timestamps can be wrong, and full-video requests are expensive.
-- Early MedGemma reviews made few substantive corrections. Model agreement does
-  not establish correctness.
+- MedGemma's value on these surgical images is unmeasured. Independent annotation,
+  structured output, and medical pretraining do not establish accuracy.
 - SOSpine provides sampled images; reconstructed video timing does not recover
   original acquisition timestamps or missing motion.
 - Completing a run does not approve its output for training. Human review,
@@ -95,7 +95,7 @@ for review notes and exports.
   reviews, expert evaluation, and student GPU training remain pending.
 
 See [video validation limits](docs/LLAMA_CPP.md#integrity-and-validation-limits)
-and the [review protocol](docs/MEDGEMMA_FRAME_REVIEW.md).
+and the [annotation evaluation plan](docs/MEDGEMMA_FRAME_ANNOTATION.md#evaluate-annotation-value).
 
 ## More guides
 

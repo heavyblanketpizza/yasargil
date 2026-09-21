@@ -1,6 +1,13 @@
 # Review and evaluation — enhancement v2
 
-**Updated 2026-09-19. Status: bounded Qwen–MedGemma enhancement and review foundations are implemented; completed-review ingestion, human assessment and comparative experiments remain outstanding.** The runtime retains exact teacher artifacts, creates a review packet with blank worksheet, and projects messages with a receipt. The procedures below remain proposed protocols, not completed studies. A populated review field, model agreement, schema-valid response or working serializer does not establish enrichment quality. See the [enhancement loop](ENHANCEMENT.md) and [dataset contract](DATASET_CONTRACT.md).
+**Updated 2026-09-22. Status: independent annotation and review/export foundations
+are implemented; expert assessment and comparative experiments remain outstanding.**
+The active [MedGemma annotation](MEDGEMMA_FRAME_ANNOTATION.md) receives source images
+without Qwen drafts or original CSV labels. Historical archives remain verifiable;
+Qwen-conditioned review/enhancement runtimes have been removed. The procedures
+below are proposed evaluations, not completed studies. Model agreement,
+schema-valid responses, and successful serialization do not establish quality.
+See the [dataset contract](DATASET_CONTRACT.md).
 
 ## Three different questions
 
@@ -34,9 +41,18 @@ Each decision identifies the reviewer, date, rubric, target claims/messages, and
 
 All model-generated claims and turns from this surgical inspection adapter require human surgeon or clinical-domain-expert review, including clinical appropriateness, before entering reviewed training. Apply this to observations and question/answer targets as well as explicit interpretations: the model's self-assigned claim type must not determine whether clinical review is needed. The deterministic source-label baseline keeps its own reviewer rules. Model review by MedGemma is a generation stage and never substitutes for this human review.
 
-The baseline uses `explicit_indices` and deterministic positive grasper/needle-driver descriptions. The bounded `enhance-sospine` path uses an initial uniform sample and optional model-requested reinspection. Qwen writes new descriptions from the selected images and original CSV labels and coordinates. MedGemma also receives those source labels: its first observation is independent of Qwen's answer, not independent of source labels. Neither path turns computed boxes into verified manual geometry or injects those source labels into student messages. Original and artifact locations resolve under separate roots; `artifact:` identifies the latter. The packet checks assets before display.
+The baseline uses `explicit_indices` and deterministic positive instrument
+labels. Historical enhancement archives supplied original labels and Qwen prose
+to MedGemma. Current independent annotation supplies source images and procedure
+context only. Record this exposure difference when comparing results. Computed
+boxes are not verified manual geometry. Original and artifact locations resolve
+under separate roots; `artifact:` identifies the latter.
 
-The separate [full-video annotation path](FRAME_ANNOTATION.md) gives Qwen the complete video and frozen selected stills without original CSV labels. [MedGemma frame review](MEDGEMMA_FRAME_REVIEW.md) receives Qwen's drafts, selected evidence images and verified source labels when available. This produces separate draft/review artifacts; it does not by itself satisfy the v2 reviewed-export gates described here. Record each workflow's actual evidence exposure when comparing results.
+The separate [Qwen full-video baseline](FRAME_ANNOTATION.md) receives complete
+video and selected stills without original CSV labels. [Independent MedGemma
+annotation](MEDGEMMA_FRAME_ANNOTATION.md) uses target-centered source-image packets
+without seeing Qwen drafts. Both produce separate proposals; neither by itself
+satisfies the v2 reviewed-export gates described here.
 
 New inference code for both workflows now uses llama.cpp. See [Migration from Ollama](LLAMA_CPP.md#migration-from-ollama) for the reasons and local setup/live-validation status. Preserve historical Ollama artifacts and their runtime provenance; the read-only verifier does not convert them. New llama.cpp runs require new output directories, and a backend change alone establishes neither better annotation quality nor reviewed training eligibility.
 
@@ -91,12 +107,19 @@ The following are proposed comparisons, not measured results:
 | Single-frame input versus a causal multi-frame prefix | Whether temporal context improves a defined task, using only prefixes that respect the input cutoff. |
 | Source-derived targets versus raw teacher proposals versus reviewed/corrected teacher targets | The effects of generation and review. Raw proposals remain a quarantined research arm, never an accepted production training release. |
 | One pinned local MedGemma setup versus a supported alternative or a task-specific baseline | The effect of model choice on accepted-label quality, expert effort, and downstream results. Record quantization and hardware instead of comparing model names alone. |
-| Qwen proposals alone versus the complete Qwen–MedGemma review loop | Whether medical review/revision improves accepted evidence and answers, rather than merely increasing agreement or wording length. Account for additional calls and human correction effort. |
-| Initial uniform evidence versus targeted Qwen reinspection | Whether requested additional evidence improves grounded answerability. Match frame/call budgets or report their differences, along with unresolved searches and missed events. |
+| Qwen-only annotations versus independent MedGemma annotations on the same targets | Whether independent medical-model generation improves supported useful detail and expert correction effort. Record different image exposure and compute budgets. |
+| Target-only MedGemma versus target plus local context/detail crops | Whether added visual evidence improves grounded answerability. Match or report frame/call budgets and measure target/context confusion and unresolved claims. |
 
 Start with instrument identification, where the independently downloaded source supplies labels for a bounded baseline. Extend to spatial localization or temporal/interpretive tasks only after their reference annotations and review rubric are established. The v2 schema's broader task vocabulary is not evidence that those experiments are ready.
 
-These arms are not all implemented as generation configurations. The current annotation-conditioned bounded loop has a verified `llama-cpp-evidence-v1` request adapter; its model-generated conversations may enter reviewed export only after actual applicable human review, eligibility and split gates. Matched image-only, Qwen-only and other ablation arms within this v2 export protocol require explicit experiment support; the separate full-video Qwen drafting workflow is not an already controlled comparison. Measured outcome targets, student annotation/reference injection and clinical-source training remain unsupported. A preview is not a route around those limits. Human review and GPU ablation results must be measured and recorded separately from generation.
+These arms are not all implemented as controlled generation configurations.
+The historical `llama-cpp-evidence-v1` verifier supports archived enhancement
+records, not automatic export of new independent MedGemma annotations. Matched
+comparisons and a new annotation export adapter need explicit experiment support.
+Measured outcome targets, student annotation/reference injection, and clinical-source
+training remain unsupported. A preview is not a route around human-review,
+eligibility, or split gates. Human review and downstream training results must
+be measured separately from generation.
 
 For each arm, train with the same partitions and a comparable compute budget; record seeds and the actual images/tokens consumed. Evaluate on frozen, independently reviewed held-out examples using task metrics and failure cases. Attribute changes to the intervention being varied. A comparative report should include review effort, accepted annotation count, uncertainty, and failures, not only the best checkpoint's score. `training_value` then links the archive/export to that report and arm; it must not contain an invented row-level estimate of future usefulness.
 
@@ -104,7 +127,12 @@ The distinction between strong component scores and a working pipeline is suppor
 
 ## Acceptance evidence and limits
 
-The runtime can produce a deterministic source baseline or a bounded Qwen–MedGemma draft, a review packet and a messages projection with a receipt. The CLI also provides local model/projector/runtime inspection and dry-run planning; invocations are in the [README](../README.md). Receipts bind revisions, schema/conversation/media hashes, partition, intended use and loss scope. The loader verifies the receipt/media before RGB PIL hydration. Implemented functionality is distinct from executed tests, live inference, human review and training results. Retain execution evidence with your local outputs; automated checks do not establish clinical accuracy or training benefit.
+The runtime can produce a deterministic source baseline and independent
+MedGemma annotation drafts. Archive validation, human-review packets, and
+receipt-bound message projections remain available for supported archive formats.
+The new annotation artifacts are not automatically eligible archive exports.
+Retain actual execution evidence and assess claims against the supplied images;
+structural checks do not establish clinical accuracy or training benefit.
 
 Validation checks source integrity, exact source-row and claim/text bindings, supported teacher-request bytes, ancestry and cutoffs, prior-turn restrictions, outcome separation, recorded reviews and surgeon-level isolation. It cannot authenticate human review or silently extend byte verification to arbitrary teacher formats. Tests should exercise these boundaries and refusals; reports must name checks actually executed. Model agreement does not prove correctness, and provenance validity does not demonstrate that the model used evidence competently.
 

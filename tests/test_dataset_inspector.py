@@ -112,6 +112,88 @@ class InspectorTests(unittest.TestCase):
         record_id = store.records()["records"][0]["id"]
         return store, record_id
 
+    def independent_run(self):
+        from yasargil.medgemma_annotation_contract import build_annotation
+        from yasargil.medgemma_annotation_evidence import canonical_frame
+        root = self.outputs / "independent" / "S1A1"
+        target = canonical_frame(self.frames[0])
+        context = canonical_frame(self.frames[1])
+        crop = root / "assets" / "detail.png"
+        crop.parent.mkdir(parents=True)
+        crop.write_bytes(b"crop pixels")
+        views = [{"view_id": f"{frame['frame_id']}:full", "frame_id": frame["frame_id"],
+            "image_path": frame["image_path"], "image_sha256": frame["image_sha256"],
+            "width": 16, "height": 16, "bounds": [0, 0, 16, 16], "role": role}
+            for frame, role in ((target, "target"), (context, "context_after"))]
+        views.insert(1, {"view_id": "f0:detail:1", "frame_id": "f0", "image_path": str(crop),
+            "image_sha256": digest(crop), "width": 8, "height": 8, "bounds": [0, 0, 8, 8], "role": "target_detail"})
+        packet = {"schema_version": "medgemma-annotation-evidence-v1", "target_frame_id": "f0", "target": target,
+            "frames": [target, context], "views": views, "procedure_context": "Documented simulated repair.", "limitations": []}
+        annotation = build_annotation({"target_frame_id": "f0", "visibility": "partial",
+            "claims": [{"claim_id": "instrument1", "category": "instrument", "statement": "Instrument jaws are visible.",
+                "support": "target_visible", "evidence_view_ids": ["f0:detail:1"], "uncertainty": "Subtype uncertain"},
+                {"claim_id": "action1", "category": "action", "statement": "Instrument approaches tissue.",
+                "support": "context_supported", "evidence_view_ids": ["f0:full", "f1:full"], "uncertainty": ""}],
+            "unresolved_questions": [{"question": "Which tissue is visible?", "reason": "Boundary obscured", "kind": "target_detail"}]}, packet)
+        row = {"target_frame_id": "f0", "target": target, "annotation": annotation, "evidence": packet,
+            "call_directory": "calls/frame-0000/attempt-0000"}
+        write(root / "source.json", self.source)
+        write(root / "selected-frames.json", [self.frames[0], self.frames[2]])
+        write(root / "evidence/frame-0000.json", packet)
+        write(root / "run.json", {"schema_version": "medgemma-frame-annotation-v1", "created_at": "2026-02-01",
+            "selection_run": str(self.selection), "source_file": "source.json", "selected_file": "selected-frames.json",
+            "frame_ids": ["f0", "f2"], "evidence_files": ["evidence/frame-0000.json"],
+            "input_sha256": {name: digest(root / name) for name in
+                             ("source.json", "selected-frames.json", "evidence/frame-0000.json")}})
+        write(root / "annotations.json", {"schema_version": "medgemma-frame-annotation-v1", "annotations": [row],
+            "human_review_required": True, "training_eligible": False})
+        write(root / "summary.json", {"status": "partial", "selected_frame_count": 2, "annotated_frame_count": 1})
+        write(root / row["call_directory"] / "annotation.json", annotation)
+        return root, packet, row
+
+    def test_independent_medgemma_annotations_need_no_qwen_artifacts(self):
+        root, packet, row = self.independent_run()
+        shutil.rmtree(self.annotation)
+        shutil.rmtree(self.review)
+        store, record_id = self.store()
+        record, detail = store.record(record_id), store.frame(record_id, "f0")
+        self.assertEqual(record["medgemma_annotation_count"], 1)
+        self.assertEqual(record["medgemma_review_count"], 0)
+        self.assertEqual(record["qwen_annotation_count"], 0)
+        self.assertIsNone(detail["qwen"])
+        self.assertEqual(detail["medgemma"], row["annotation"])
+        self.assertEqual(record["runs"]["medgemma"]["path"], str(root))
+        self.assertEqual([view["view_id"] for view in detail["evidence"]], [view["view_id"] for view in packet["views"]])
+        self.assertEqual(detail["evidence"][1]["bounds"], [0, 0, 8, 8])
+        self.assertIsNotNone(store.media(detail["evidence"][1]["image_url"].rsplit("/", 1)[-1]))
+        self.assertEqual(detail["artifacts"][0]["label"], "MedGemma annotation")
+        self.assertIsNone(store.frame(record_id, "f2")["medgemma"])
+        self.assertFalse(store.records()["warnings"])
+        curation = store.curate(record_id, "f0", {"review_identity": record["review_identity"],
+            "action": "edit", "annotations": {"medgemma": "Human annotation"}})
+        self.assertEqual(curation["provenance"]["original_annotations"]["medgemma"], row["annotation"])
+
+    def test_independent_annotations_take_precedence_and_keep_historical_run_links(self):
+        root, _, row = self.independent_run()
+        store, record_id = self.store()
+        record = store.record(record_id)
+        self.assertEqual(record["runs"]["medgemma"]["path"], str(root))
+        self.assertEqual(record["runs"]["historical_medgemma_reviews"][0]["path"], str(self.review))
+        self.assertEqual(store.frame(record_id, "f0")["medgemma"], row["annotation"])
+
+    def test_independent_annotation_rejects_changed_pinned_evidence_and_invalid_claims(self):
+        root, _, row = self.independent_run()
+        row["annotation"]["claims"][0]["evidence_view_ids"] = ["invented"]
+        write(root / "annotations.json", {"schema_version": "medgemma-frame-annotation-v1", "annotations": [row]})
+        store, record_id = self.store()
+        self.assertEqual(store.record(record_id)["medgemma_annotation_count"], 0)
+        self.assertIsNone(store.frame(record_id, "f0")["medgemma"])
+        self.assertTrue(store.frame(record_id, "f0")["evidence"])
+        write(root / "evidence/frame-0000.json", {"target_frame_id": "f0"})
+        store, record_id = self.store()
+        self.assertNotEqual(store.record(record_id)["runs"]["medgemma"]["path"], str(root))
+        self.assertTrue(any("independent MedGemma" in warning for warning in store.records()["warnings"]))
+
     def test_v2_frame_bound_annotations_remain_visible_in_the_inspector(self):
         self.annotation_plan["schema_version"] = "full-video-frame-annotation-v2"
         write(self.annotation / "run.json", self.annotation_plan)

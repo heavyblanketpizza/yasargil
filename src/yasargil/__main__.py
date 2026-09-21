@@ -45,8 +45,8 @@ def main(argv=None):
     add_gap_parser(sub)
     from .frame_annotation import add_annotation_parser
     add_annotation_parser(sub)
-    from .medgemma_review import add_review_parser
-    add_review_parser(sub)
+    from .medgemma_annotation import add_annotation_parser as add_medgemma_parser
+    add_medgemma_parser(sub)
     from .dataset_inspector import add_inspector_parser
     add_inspector_parser(sub)
     imp = sub.add_parser("import-sospine", help="Import a bounded source-derived draft, without inference")
@@ -55,45 +55,10 @@ def main(argv=None):
     imp.add_argument("--frame-indices", type=int, nargs="+", required=True)
     imp.add_argument("--output", type=Path, required=True)
     models = sub.add_parser("models", help="Inspect local llama.cpp model files and runtime identities")
-    enhance = sub.add_parser("enhance-sospine", help="Qwen discovery and MedGemma review with retained evidence")
-    enhance.add_argument("--dataset-root", type=Path, required=True)
-    enhance.add_argument("--case-id", required=True)
-    enhance.add_argument("--start-index", type=int, required=True)
-    enhance.add_argument("--cutoff-index", type=int, required=True)
-    enhance.add_argument("--output-dir", type=Path)
-    enhance.add_argument("--resume", action="store_true", help="Resume this exact saved configuration")
-    enhance.add_argument("--dry-run", action="store_true", help="Print a selection plan without writes or model calls")
-    enhance.add_argument("--initial-frames", type=int, default=8)
-    enhance.add_argument("--search-frames", type=int, default=4)
-    enhance.add_argument("--max-frames", type=int, default=24)
-    enhance.add_argument("--max-rounds", type=int, default=1)
-    enhance.add_argument("--num-ctx", type=int, default=65536)
-    enhance.add_argument("--num-predict", type=int, default=4096)
-    enhance.add_argument("--seed", type=int, default=42)
-    batch = sub.add_parser("enhance-sospine-batch", help="Process full released sequences with durable call/window checkpoints")
-    batch.add_argument("--dataset-root", type=Path, required=True)
-    batch.add_argument("--case-ids", nargs="+", required=True)
-    batch.add_argument("--output-dir", type=Path)
-    batch.add_argument("--dry-run", action="store_true")
-    batch.add_argument("--window-size", type=int, default=12)
-    batch.add_argument("--initial-frames", type=int, default=4)
-    batch.add_argument("--search-frames", type=int, default=4)
-    batch.add_argument("--max-frames", type=int, default=8)
-    batch.add_argument("--max-rounds", type=int, default=1)
-    batch.add_argument("--num-ctx", type=int, default=65536)
-    batch.add_argument("--num-predict", type=int, default=4096)
-    batch.add_argument("--seed", type=int, default=42)
-    resume = sub.add_parser("resume-enhancement", help="Resume a saved batch/window using its original settings")
-    resume.add_argument("--output-dir", type=Path, required=True)
-    for name in ("enhancement-status", "pause-enhancement"):
-        command = sub.add_parser(name)
-        command.add_argument("--output-dir", type=Path, required=True)
-    for command in (models, enhance, batch):
-        command.add_argument("--qwen-model", default=QWEN_MODEL)
-        command.add_argument("--medgemma-model", default=MEDGEMMA_MODEL)
-    for command in (models, enhance, batch, resume):
-        command.add_argument("--project-root", type=Path, default=Path.cwd(), help="Root containing .runtime")
-        command.add_argument("--timeout", type=float, default=600, help="Seconds per llama.cpp request")
+    models.add_argument("--qwen-model", default=QWEN_MODEL)
+    models.add_argument("--medgemma-model", default=MEDGEMMA_MODEL)
+    models.add_argument("--project-root", type=Path, default=Path.cwd())
+    models.add_argument("--timeout", type=float, default=600)
     for name in ("validate", "review-packet", "export"):
         command = sub.add_parser(name)
         command.add_argument("records", type=Path)
@@ -125,14 +90,14 @@ def main(argv=None):
             from .dataset_inspector import inspector_cli
             inspector_cli(args)
             return
-        if args.command == "review-frame-annotations":
-            from .medgemma_review import review_cli
+        if args.command == "annotate-selected-frames":
+            from .medgemma_annotation import annotation_cli as medgemma_cli
             with cooperative_stop() as should_stop:
-                review_cli(args, should_stop=should_stop)
+                medgemma_cli(args, should_stop=should_stop)
             return
-        if args.command in {"frame-review-status", "pause-frame-review"}:
-            from .medgemma_review import review_status, request_review_pause
-            action = review_status if args.command == "frame-review-status" else request_review_pause
+        if args.command in {"medgemma-annotation-status", "pause-medgemma-annotation"}:
+            from .medgemma_annotation import annotation_status, request_annotation_pause
+            action = annotation_status if args.command == "medgemma-annotation-status" else request_annotation_pause
             print(json.dumps(action(args.output_dir), indent=2))
             return
         if args.command == "annotate-video-frames":
@@ -159,68 +124,11 @@ def main(argv=None):
             from .smart_selection import selection_cli
             selection_cli(args)
             return
-        if args.command in {"enhancement-status", "pause-enhancement"}:
-            from .batch import enhancement_status, request_pause
-            action = enhancement_status if args.command == "enhancement-status" else request_pause
-            print(json.dumps(action(args.output_dir), indent=2))
-            return
-        if args.command == "resume-enhancement":
-            from .batch import BatchConfig, _json, enhance_batch
-            from .enhancement import EnhancementConfig, enhance_sospine
-            require(not args.output_dir.is_symlink(), "Cannot resume a symlinked directory")
-            if (args.output_dir / "batch.json").is_file():
-                saved = _json(args.output_dir / "batch.json")["plan"]
-                config = BatchConfig(**saved["config"])
-                run = enhance_batch
-                dataset_root = saved["dataset_root"]
-            else:
-                saved = _json(args.output_dir / "plan.json")
-                session = _json(args.output_dir / "session.json")
-                config = EnhancementConfig(**saved["config"])
-                run = enhance_sospine
-                dataset_root = session["dataset_root"]
-            with cooperative_stop() as paused:
-                result = run(dataset_root, args.output_dir, config, resume=True,
-                             client=LlamaCppClient(args.project_root, timeout=args.timeout), pause_requested=paused,
-                             progress=lambda message: print(message, flush=True))
-            print(json.dumps(result, indent=2))
-            return
-        if args.command == "enhance-sospine-batch":
-            from .batch import BatchConfig, enhance_batch, plan_batch
-            config = BatchConfig(**{key: getattr(args, key) for key in (
-                "case_ids", "window_size", "initial_frames", "search_frames", "max_frames",
-                "max_rounds", "qwen_model", "medgemma_model", "num_ctx", "num_predict", "seed")})
-            if args.dry_run:
-                print(json.dumps(plan_batch(args.dataset_root, config), indent=2))
-            else:
-                require(args.output_dir is not None, "--output-dir is required unless --dry-run is used")
-                with cooperative_stop() as paused:
-                    result = enhance_batch(args.dataset_root, args.output_dir, config,
-                        client=LlamaCppClient(args.project_root, timeout=args.timeout), pause_requested=paused,
-                        progress=lambda message: print(message, flush=True))
-                print(json.dumps(result, indent=2))
-            return
         if args.command == "models":
             client = LlamaCppClient(args.project_root, timeout=args.timeout)
             for name in (args.qwen_model, args.medgemma_model):
                 info = client.model_info(name)
                 print(json.dumps(info))
-            return
-        if args.command == "enhance-sospine":
-            from .enhancement import EnhancementConfig, enhance_sospine, plan_enhancement
-            config = EnhancementConfig(**{key: getattr(args, key) for key in (
-                "case_id", "start_index", "cutoff_index", "initial_frames", "search_frames", "max_frames",
-                "max_rounds", "qwen_model", "medgemma_model", "num_ctx", "num_predict", "seed")})
-            if args.dry_run:
-                print(json.dumps(plan_enhancement(args.dataset_root, config), indent=2))
-            else:
-                require(args.output_dir is not None, "--output-dir is required unless --dry-run is used")
-                with cooperative_stop() as paused:
-                    result = enhance_sospine(args.dataset_root, args.output_dir, config,
-                                         resume=args.resume, pause_requested=paused,
-                                         client=LlamaCppClient(args.project_root, timeout=args.timeout),
-                                         progress=lambda message: print(message, flush=True))
-                print(json.dumps(result, indent=2))
             return
         if args.command == "import-sospine":
             from .sospine import import_case

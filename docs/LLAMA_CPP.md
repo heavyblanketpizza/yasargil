@@ -1,14 +1,14 @@
 # Local inference with llama.cpp
 
 llama.cpp is Yasargil's only Qwen/MedGemma generation backend. Qwen's native-video selection
-and annotation paths, ordered-image enhancement, and MedGemma review all use
+and annotation paths and independent MedGemma annotation all use
 the pinned local runtime. Each workflow owns its local server and stops it
 when its inference work finishes; an always-on service is unnecessary.
 
 [Complete-video frame selection](SMART_FRAME_SELECTION.md) requires every
 source frame, validates native decoding and timestamps, and preserves the
-complete video in its requests. [Enhancement](ENHANCEMENT.md) and
-[MedGemma review](MEDGEMMA_FRAME_REVIEW.md) send ordered still images using the
+complete video in its requests. [MedGemma annotation](MEDGEMMA_FRAME_ANNOTATION.md)
+sends ordered source stills and optional detail crops using the
 OpenAI-compatible chat endpoint with image data URLs and a JSON-schema
 `response_format`. These are different evidence protocols on the same backend.
 The standalone video experiment below samples at its configured FPS.
@@ -69,14 +69,14 @@ inference backend, and both independent model/projector pairs are installed
 locally. Qwen and MedGemma have each passed an ordered-image smoke call with a
 structured response. A complete three-call enhancement run also passed using
 synthetic source data, covering Qwen proposal, independent MedGemma observation,
-and MedGemma review with retained artifacts. Qwen native-video runs have also
+and MedGemma review with retained artifacts. That enhancement runner has since
+been removed. Qwen native-video runs have also
 executed locally. These checks establish working input and response paths; they do not establish
-completion or quality of a production dataset enhancement/review run on the
-migrated backend.
+completion or quality of an independent surgical annotation run on this backend.
 
 The transition happened in stages: complete-video selection, annotation and
-gap experiments already used llama.cpp. The remaining Ollama image workflows,
-bounded enhancement and MedGemma review, now use it too. DINO frame embeddings
+gap experiments already used llama.cpp. The old image-review workflows migrated
+next and were later replaced by independent MedGemma annotation. DINO frame embeddings
 and Hugging Face/Unsloth training keep their separate execution paths.
 
 The reasons for the change are:
@@ -92,8 +92,8 @@ The reasons for the change are:
   source inventory and reject truncation; the runtime disables automatic fitting
   and context shifting. These controls help audit what was supplied, without
   proving that the model understood it or cited the correct event time.
-- **One local inference backend.** Ordered-image enhancement and MedGemma review
-  now use the same runtime family as Qwen video. The application owns server
+- **One local inference backend.** Independent MedGemma annotation uses the
+  same runtime family as Qwen video. The application owns server
   startup/shutdown, uses explicit GGUF model/projector files, and retains requests,
   responses and runtime identities for inspection.
 
@@ -139,9 +139,10 @@ other installations can supply a compatible upstream model/projector pair.
 Historical Ollama requests, responses and archives retain their original bytes
 and provenance. They are not converted or relabeled as llama.cpp calls, and an
 Ollama run cannot resume under the new backend. Start a new output directory.
-The ordered-image teacher adapter is now `llama-cpp-evidence-v1`; it binds the
-OpenAI-compatible request and response to the local model, projector and runtime.
-A read-only verifier remains for original `ollama-evidence-v1` archives. Verified
+Historical ordered-image archives retain their `llama-cpp-evidence-v1` or
+`ollama-evidence-v1` teacher adapters. These read-only verifiers reconstruct
+original requests against model, source, and runtime records; they are not
+independent-annotation inference or resume paths. Verified
 historical records can still pass export only after all ordinary human-review,
 eligibility and partition gates. Backend migration grants no review approval.
 

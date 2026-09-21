@@ -137,14 +137,16 @@ SOSpine/
     ...
 ```
 
-Supply that root explicitly, for example:
+Use the frame directory to select images, then annotate that completed selection:
 
 ```sh
-uv run yasargil enhance-sospine \
-  --dataset-root "$SOSPINE_ROOT" \
-  --case-id S1A2 --start-index 1 --cutoff-index 12 \
-  --initial-frames 4 --search-frames 4 --max-frames 8 \
-  --dry-run
+uv run --extra selection yasargil select-video-frames \
+  --input "$SOSPINE_ROOT/frames/S1A2" --released-fps 1 \
+  --output-dir outputs/selection-example
+
+uv run yasargil annotate-selected-frames \
+  --selection-run outputs/selection-example \
+  --output-dir outputs/medgemma-annotation-example --prepare-only
 ```
 
 The [dataset contract](DATASET_CONTRACT.md) records observed release discrepancies
@@ -162,18 +164,19 @@ by Yasargil. Keeping an exact row means preserving the original values and
 source locator; it does not assert that the label or geometry is error-free.
 
 The deterministic importer re-expresses selected source instrument labels and
-retains the exact evidence references. In the complete-video annotation path,
-Qwen writes new visible observations, contextual claims, and uncertainty from
-the supplied video and selected stills, without the original CSV labels. The
-later MedGemma review receives those drafts, selected images, and matching
-source labels when available. The separate bounded enhancement loop supplies
-original label/coordinate rows to both models from the outset.
+retains the exact evidence references. [Independent MedGemma annotation](MEDGEMMA_FRAME_ANNOTATION.md)
+authors new target descriptions and evidence-linked claims from selected source
+images, nearby observations, and optional detail crops. Its model input excludes
+original CSV rows and Qwen drafts. The separate Qwen full-video annotation
+provides a comparison baseline, not an input to MedGemma. Removed historical
+review/enhancement workflows had different evidence exposure; their artifacts
+retain those original inputs.
 
 These workflows produce model proposals, source hashes, model-call records,
 and review artifacts in a separate output directory. Reconstructed videos use explicit sampling
 assumptions; generated descriptions remain proposals pending human review.
 Training export applies the documented evidence, review, and partition checks.
-See [Enhancement](ENHANCEMENT.md), [Frame selection](SMART_FRAME_SELECTION.md),
+See [MedGemma annotation](MEDGEMMA_FRAME_ANNOTATION.md), [Frame selection](SMART_FRAME_SELECTION.md),
 and [Training](TRAINING.md).
 
 New inference uses local llama.cpp. Dataset files and original CSV values are

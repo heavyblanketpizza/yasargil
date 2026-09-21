@@ -39,6 +39,7 @@ function harness() {
     setPointerCapture(pointerId) { this.capturedPointerId = pointerId; }
     setAttribute(name, value) { this.attributes.set(name, value); }
     getAttribute(name) { return this.attributes.get(name); }
+    get childNodes() { return this.children; }
     append(...children) { this.children.push(...children); for (const child of children) if (child.id) nodes.set(child.id, child); }
     replaceChildren(...children) { this.children = []; this.append(...children); }
     remove() {}
@@ -71,7 +72,7 @@ function harness() {
   // Keep the entire script, including its event wiring; suppress only startup loading.
   assert.match(source, /\nrefreshRecords\(\);\s*$/);
   vm.runInContext(source.replace(/\nrefreshRecords\(\);\s*$/, '\n') + `
-    globalThis.reviewTest = { state, reviewDrafts, noteKey, reviewDraftKey, loadNotes, renderReview, updateReviewCount, renderCuration, contextWindow, setMode };
+    globalThis.reviewTest = { state, reviewDrafts, noteKey, reviewDraftKey, loadNotes, renderReview, updateReviewCount, renderCuration, contextWindow, setMode, renderDetail, annotationText };
   `, context);
   const api = context.reviewTest;
   api.state.record = { id: 'record-one', review_identity: 'version-one', frames: [
@@ -416,4 +417,36 @@ test('opening the dataset folder does not save or discard the current review dra
   assert.equal(ui.requests[0].options.method, 'POST'); assert.equal(ui.requests[0].options.body, '');
   assert.equal(ui.reviewDrafts.get(key).note, 'Unsaved inspection note');
   assert.equal(ui.storage.writes, 0); assert.equal(ui.node('open-dataset-folder').disabled, false);
+});
+
+test('independent MedGemma claims display without a Qwen draft and link their image views', () => {
+  const ui = harness();
+  ui.state.record.frames[0].status = 'selected';
+  ui.state.detail = {
+    frame: ui.state.record.frames[0], qwen: null, medgemma_protocol: 'medgemma-frame-annotation-v1',
+    medgemma: { schema_version: 'medgemma-frame-annotation-v1', visibility: 'partial', status: 'needs_more_evidence',
+      claims: [
+        {category: 'instrument', support: 'target_visible', statement: '<script>Instrument</script>', evidence_view_ids: ['f0:detail:1'], uncertainty: 'Subtype uncertain'},
+        {category: 'action', support: 'context_supported', statement: 'Instrument approaches tissue.', evidence_view_ids: ['f0:full', 'f1:full'], uncertainty: ''},
+      ], unresolved_questions: [{question: 'Which tissue?', reason: 'Boundary obscured', kind: 'target_detail'}]},
+    evidence: [
+      {view_id: 'f0:full', frame_id: 'frame-one', role: 'target', roles: ['target'], timestamp_ms: 0, image_url: '/media/target'},
+      {view_id: 'f0:detail:1', frame_id: 'frame-one', role: 'target_detail', roles: ['target_detail'], timestamp_ms: 0, bounds: [0, 0, 8, 8], image_url: '/media/crop'},
+      {view_id: 'f1:full', frame_id: 'frame-two', role: 'context_after', roles: ['context_after'], timestamp_ms: 1000, image_url: '/media/after'},
+    ]};
+  ui.renderDetail(ui.state.detail);
+  const descendants = (node) => [node, ...node.children.flatMap(descendants)];
+  const content = descendants(ui.node('medgemma-content'));
+  assert.equal(ui.node('qwen-block').hidden, true);
+  assert.equal(ui.node('enhancement-models').classList.contains('single-model'), true);
+  assert.equal(ui.node('medgemma-state').textContent, 'INDEPENDENT ANNOTATION');
+  assert.ok(content.some(node => node.textContent === 'VISIBLE IN THIS FRAME'));
+  assert.ok(content.some(node => node.textContent === 'CONTEXT-SUPPORTED INTERPRETATION'));
+  assert.ok(content.some(node => node.textContent === '<script>Instrument</script>' && node.tagName === 'P'));
+  assert.ok(content.some(node => node.tagName === 'A' && node.href === 'http://127.0.0.1:8765/media/crop'));
+  assert.ok(content.some(node => node.textContent === 'Which tissue?'));
+  assert.ok(descendants(ui.node('supporting-evidence')).some(node => node.textContent === 'Source bounds: 0, 0, 8, 8'));
+  assert.match(ui.annotationText('medgemma'), /Uncertainty: Subtype uncertain/);
+  assert.match(ui.annotationText('medgemma'), /Evidence: f0:full, f1:full/);
+  assert.equal(ui.node('edit-enhancement').disabled, false);
 });

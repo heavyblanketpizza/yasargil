@@ -3,7 +3,7 @@
 This workflow proposes frames, then asks local Qwen to review the complete native video and fixed candidate set jointly in one call.
 Qwen only keeps or drops the sampled candidates. It cannot request additions or replacements.
 The workflow preserves files, timestamps, hashes, exact requests, and decisions.
-Selections are provisional, not approved clinical captions or training labels. The bounded enhancement workflow is a separate command path using the same local llama.cpp backend.
+Selections are provisional, not approved clinical captions or training labels. [Independent MedGemma annotation](MEDGEMMA_FRAME_ANNOTATION.md) consumes the completed selection and source images without receiving Qwen prose.
 
 This Qwen path supplies the video, candidate stills, source locators, and
 optional documented procedure background; it does not supply SOSpine's original
