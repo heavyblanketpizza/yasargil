@@ -29,9 +29,10 @@ from urllib.parse import parse_qs, unquote, urlsplit
 
 _SELECTION = "smart-frame-selection-run-v1"
 _ANNOTATION = "full-video-frame-annotation-v1"
+_ANNOTATION_SCHEMAS = {_ANNOTATION, "full-video-frame-annotation-v2"}
 _REVIEW = "medgemma-frame-review-v1"
 _REVIEW_SCHEMAS = {_REVIEW, "medgemma-surgery-review-v1"}
-_SCHEMAS = {_SELECTION, _ANNOTATION, *_REVIEW_SCHEMAS}
+_SCHEMAS = {_SELECTION, *_ANNOTATION_SCHEMAS, *_REVIEW_SCHEMAS}
 _CASE = re.compile(r"(?:S[1-8]A[1-3]|Clip[01])")
 _IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".tif", ".tiff"}
 _VIDEO_SUFFIXES = {".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v"}
@@ -537,7 +538,7 @@ class InspectorStore:
     def _annotations(self, root, source, selection, runs):
         matching = []
         for child, plan in runs:
-            if plan.get("schema_version") != _ANNOTATION or not _same_path(plan.get("selection_run"), root):
+            if plan.get("schema_version") not in _ANNOTATION_SCHEMAS or not _same_path(plan.get("selection_run"), root):
                 continue
             copied_source = _read(child / "source/source.json")
             hashes = plan.get("input_sha256", {})

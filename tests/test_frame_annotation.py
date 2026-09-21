@@ -13,7 +13,9 @@ from PIL import Image
 
 from yasargil.contract import ContractError, sha256_file
 from yasargil.frame_annotation import (
-    AnnotationConfig, add_annotation_parser, annotation_status, request_annotation_pause, run_annotation,
+    AnnotationConfig, LEGACY_PROTOCOL_VERSION, PROTOCOL_VERSION,
+    _annotation_schema, _build_annotations, _messages, _protocol_hash,
+    add_annotation_parser, annotation_status, request_annotation_pause, run_annotation,
 )
 from yasargil.smart_selection import SelectionConfig, review_loop
 from yasargil.video_source import prepare_video_source
@@ -81,10 +83,39 @@ def annotation_answer(ids):
             "visibility": "clear",
             "contextual_claims": [{
                 "claim": "The surrounding sequence contains a change of background color.",
-                "evidence_intervals": [{"start_ms": 0, "end_ms": 1000}],
+                "evidence_intervals": [{"start_frame_id": ids[0], "end_frame_id": ids[min(1, len(ids) - 1)]}],
             }],
             "uncertainties": ["This synthetic sequence contains no anatomy or surgical action."],
         } for frame_id in ids}}
+
+
+def make_legacy_annotation(output):
+    """Construct a completed historical fixture without a legacy inference path."""
+    plan, source = read(output / "run.json"), read(output / "source/source.json")
+    plan.update(schema_version=LEGACY_PROTOCOL_VERSION, protocol_sha256=_protocol_hash(LEGACY_PROTOCOL_VERSION))
+    write(output / "run.json", plan)
+    config = AnnotationConfig(**plan["config"])
+    selected = read(output / "selected-frames.json")
+    aliases = {frame["frame_id"]: f"frame-{index:08d}{Path(frame['image_path']).suffix.lower()}"
+               for index, frame in enumerate(source["frames"])}
+    video_name = "video" + Path(source["video_path"]).suffix.lower()
+    messages = _messages(source, selected, aliases, video_name, config, protocol_version=LEGACY_PROTOCOL_VERSION)
+    canonical = {frame["frame_id"]: frame for frame in source["frames"]}
+    raw = read(output / "round-00/output.json")
+    for row in raw["annotations"].values():
+        for claim in row["contextual_claims"]:
+            for interval in claim["evidence_intervals"]:
+                first, last = interval.pop("start_frame_id"), interval.pop("end_frame_id")
+                interval.update(start_ms=canonical[first]["timestamp_ms"], end_ms=canonical[last]["timestamp_ms"])
+    result = publish_result(messages, _annotation_schema(plan, source), config.max_tokens,
+                            output / "round-00", raw, source["expected_video_frames"])
+    document = read(output / "annotations.json")
+    document.update(_build_annotations(raw, selected, source, plan), verification=result["verification"],
+                    model_result_sha256=sha256_file(output / "round-00/result.json"))
+    write(output / "annotations.json", document)
+    summary = read(output / "summary.json")
+    summary["schema_version"] = LEGACY_PROTOCOL_VERSION
+    write(output / "summary.json", summary)
 
 
 class AnnotationRuntime:
@@ -201,6 +232,10 @@ class FrameAnnotationTests(unittest.TestCase):
         overview = json.loads(blocks[0]["text"])
         self.assertEqual(overview["complete_video_frame_count"], 8)
         self.assertEqual(overview["video_sha256"], self.source["video_sha256"])
+        self.assertEqual(overview["evidence_frame_inventory"], {
+            "columns": ["frame_id", "timestamp_ms"],
+            "rows": [[frame["frame_id"], frame["timestamp_ms"]] for frame in self.source["frames"]]})
+        self.assertEqual(schema["$defs"]["source_frame_id"]["enum"], self.ids)
         serialized = json.dumps(messages)
         self.assertIn(self.selection_config.procedure_context, serialized)
         for secret in ("PRIVATE_SELECTOR_SCENE_DESCRIPTION", "PRIVATE_SELECTOR_KEEP_DROP_REASON",
@@ -215,6 +250,8 @@ class FrameAnnotationTests(unittest.TestCase):
                      "selected-frames.json", "annotations.json", "summary.json", "report.html"):
             self.assertTrue((self.output / name).is_file(), name)
         draft = read(self.output / "annotations.json")
+        self.assertEqual(draft["schema_version"], "contextual-frame-annotations-v2")
+        self.assertEqual(read(self.output / "run.json")["schema_version"], PROTOCOL_VERSION)
         self.assertFalse(draft["training_eligible"])
         self.assertEqual([frame["frame_id"] for frame in draft["annotations"]], self.selected_ids)
         canonical = {frame["frame_id"]: frame for frame in self.source["frames"]}
@@ -223,7 +260,7 @@ class FrameAnnotationTests(unittest.TestCase):
             for key, value in canonical[frame["frame_id"]].items():
                 self.assertEqual(frame[key], value, key)
             interval = frame["contextual_claims"][0]["evidence_intervals"][0]
-            self.assertEqual(interval["supporting_frames"], self.source["frames"][:2])
+            self.assertEqual(interval["supporting_frames"], self.source["frames"][:3])
 
     def test_prepare_pins_inputs_without_loading_a_model(self):
         factory = RuntimeFactory()
@@ -335,6 +372,39 @@ class FrameAnnotationTests(unittest.TestCase):
         self.assertEqual(self.run_pass(resumed, resume=True)["status"], "completed")
         self.assertEqual(resumed.sessions, [])
         self.assertEqual(before, {name: (self.output / name).read_bytes() for name in before})
+
+    def test_completed_legacy_annotation_remains_verifiable_without_rewriting_raw_evidence(self):
+        self.run_pass(RuntimeFactory())
+        make_legacy_annotation(self.output)
+        before = {name: (self.output / name).read_bytes() for name in
+                  ("run.json", "round-00/request.json", "round-00/response.json", "annotations.json")}
+        resumed = RuntimeFactory()
+        self.assertEqual(self.run_pass(resumed, resume=True)["status"], "completed")
+        self.assertEqual(resumed.sessions, [])
+        self.assertEqual(before, {name: (self.output / name).read_bytes() for name in before})
+
+    def test_legacy_prepared_pass_cannot_start_new_timestamp_generation(self):
+        self.run_pass(RuntimeFactory(), prepare_only=True)
+        plan = read(self.output / "run.json")
+        plan.update(schema_version=LEGACY_PROTOCOL_VERSION, protocol_sha256=_protocol_hash(LEGACY_PROTOCOL_VERSION))
+        write(self.output / "run.json", plan)
+        resumed = RuntimeFactory()
+        with self.assertRaisesRegex(ContractError, "Legacy timestamp generation cannot resume"):
+            self.run_pass(resumed, resume=True)
+        self.assertEqual(resumed.sessions, [])
+
+    def test_single_last_frame_evidence_has_its_exact_time_and_survives_resume(self):
+        def last_frame(ids):
+            raw = annotation_answer(ids)
+            for row in raw["annotations"].values():
+                row["contextual_claims"][0]["evidence_intervals"] = [
+                    {"start_frame_id": self.ids[-1], "end_frame_id": self.ids[-1]}]
+            return raw
+        self.run_pass(RuntimeFactory(last_frame))
+        interval = read(self.output / "annotations.json")["annotations"][0]["contextual_claims"][0]["evidence_intervals"][0]
+        self.assertEqual((interval["start_ms"], interval["end_ms"]), (7000, 7000))
+        self.assertEqual(interval["supporting_frames"], self.source["frames"][-1:])
+        self.assertEqual(self.run_pass(RuntimeFactory(), resume=True)["status"], "completed")
 
     def test_accepted_response_recovers_after_crash_without_repeating_inference(self):
         interrupted = RuntimeFactory(interrupt_after_save=True)

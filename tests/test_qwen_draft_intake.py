@@ -16,7 +16,7 @@ from PIL import Image
 
 from tests import test_frame_annotation as fixtures
 from yasargil.contract import ContractError, sha256_file
-from yasargil.frame_annotation import AnnotationConfig
+from yasargil.frame_annotation import AnnotationConfig, LEGACY_PROTOCOL_VERSION
 from yasargil.qwen_draft_intake import load_rejected_annotation
 
 
@@ -30,6 +30,8 @@ def make_rejected_fixture(root, *, schema_rejected=False):
     unchanged model interval so integration tests can assert preservation.
     """
     root = Path(root).resolve()
+    if read(root / "run.json")["schema_version"] != LEGACY_PROTOCOL_VERSION:
+        fixtures.make_legacy_annotation(root)
     plan, source = read(root / "run.json"), read(root / "source/source.json")
     config = AnnotationConfig(**plan["config"])
     directory = root / "round-00"
@@ -114,7 +116,7 @@ def make_rejected_fixture(root, *, schema_rejected=False):
     write(directory / "verification.json", verification)
     write(root / "last-error.json", error)
     summary = read(root / "summary.json")
-    summary.update(status="failed", error=error)
+    summary.update(schema_version=LEGACY_PROTOCOL_VERSION, status="failed", error=error)
     write(root / "summary.json", summary)
     (root / "annotations.json").unlink()
     return {"frame_id": frame_id, "interval": interval, "schema_rejected": schema_rejected}

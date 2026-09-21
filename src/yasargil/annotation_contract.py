@@ -15,6 +15,10 @@ from jsonschema import Draft202012Validator, ValidationError
 from .contract import ContractError, require
 
 
+TIMESTAMP_EVIDENCE = "timestamps"
+FRAME_EVIDENCE = "source_frame_ids"
+
+
 def _number(value, label, *, minimum=None):
     try:
         finite = isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
@@ -30,7 +34,8 @@ def _positive(value, label):
     return value
 
 
-def annotation_schema(frame_ids, duration_ms, *, max_evidence_span_ms=10000):
+def annotation_schema(frame_ids, duration_ms, *, max_evidence_span_ms=10000,
+                      source_frames=None, evidence_mode=TIMESTAMP_EVIDENCE):
     """Return the strict response schema for exactly the frozen selected IDs.
 
     Interval order, finite numbers, maximum span, and actual observations are
@@ -38,6 +43,7 @@ def annotation_schema(frame_ids, duration_ms, *, max_evidence_span_ms=10000):
     """
     _positive(duration_ms, "source duration")
     _positive(max_evidence_span_ms, "maximum evidence span")
+    require(evidence_mode in (TIMESTAMP_EVIDENCE, FRAME_EVIDENCE), "Unknown annotation evidence mode")
     require(not isinstance(frame_ids, (str, bytes, dict)), "Selected frame IDs must be a sequence")
     try:
         ids = list(frame_ids)
@@ -50,6 +56,19 @@ def annotation_schema(frame_ids, duration_ms, *, max_evidence_span_ms=10000):
         "start_ms": {"type": "number", "minimum": 0, "maximum": duration_ms},
         "end_ms": {"type": "number", "minimum": 0, "maximum": duration_ms},
     }, "required": ["start_ms", "end_ms"]}
+    if evidence_mode == FRAME_EVIDENCE:
+        require(isinstance(source_frames, (list, tuple)) and source_frames,
+                "Frame citations require the complete source inventory")
+        source_ids = [frame.get("frame_id") if isinstance(frame, dict) else None for frame in source_frames]
+        require(all(isinstance(frame_id, str) and frame_id.strip() for frame_id in source_ids)
+                and len(source_ids) == len(set(source_ids)) and set(ids) <= set(source_ids),
+                "Frame citations require unique source IDs containing every selected frame")
+        # One shared enum avoids repeating thousands of IDs for every target.
+        # These are direct local references; the definition has no nested refs.
+        interval = {"type": "object", "additionalProperties": False, "properties": {
+            "start_frame_id": {"$ref": "#/$defs/source_frame_id"},
+            "end_frame_id": {"$ref": "#/$defs/source_frame_id"},
+        }, "required": ["start_frame_id", "end_frame_id"]}
     claim = {"type": "object", "additionalProperties": False, "properties": {
         "claim": {"type": "string", "minLength": 1, "maxLength": 600},
         "evidence_intervals": {"type": "array", "minItems": 1, "maxItems": 3, "items": interval},
@@ -61,11 +80,14 @@ def annotation_schema(frame_ids, duration_ms, *, max_evidence_span_ms=10000):
         "uncertainties": {"type": "array", "minItems": 0, "maxItems": 6,
                           "items": {"type": "string", "minLength": 1, "maxLength": 400}},
     }, "required": ["visible_observation", "visibility", "contextual_claims", "uncertainties"]}
-    return {"type": "object", "additionalProperties": False, "properties": {
+    schema = {"type": "object", "additionalProperties": False, "properties": {
         "context_check": {"type": "string", "enum": ["consistent", "uncertain", "conflict", "not_supplied"]},
         "annotations": {"type": "object", "additionalProperties": False,
                         "properties": {frame_id: copy.deepcopy(annotation) for frame_id in ids}, "required": ids},
     }, "required": ["context_check", "annotations"]}
+    if evidence_mode == FRAME_EVIDENCE:
+        schema["$defs"] = {"source_frame_id": {"type": "string", "enum": source_ids}}
+    return schema
 
 
 def _path(value, label):
@@ -113,10 +135,13 @@ def _source_index(source):
     return result, duration
 
 
-def build_annotations(raw, selected_frames, source, *, max_evidence_span_ms=10000):
+def build_annotations(raw, selected_frames, source, *, max_evidence_span_ms=10000,
+                      evidence_mode=TIMESTAMP_EVIDENCE):
     """Validate drafts and attach unchanged source rows to evidence intervals.
 
     Intervals are closed: observations exactly at either endpoint are included.
+    Frame citations map their endpoints to exact source timestamps. A single
+    frame is a point citation; its display duration is never invented.
     Selection and source objects are never modified. The returned records remain
     review-required even when every locator is valid and Qwen reports agreement.
     """
@@ -136,7 +161,9 @@ def build_annotations(raw, selected_frames, source, *, max_evidence_span_ms=1000
         selected_ids.append(frame_id)
     try:
         Draft202012Validator(annotation_schema(selected_ids, duration,
-                                               max_evidence_span_ms=max_evidence_span_ms)).validate(raw)
+                                               max_evidence_span_ms=max_evidence_span_ms,
+                                               source_frames=source["frames"],
+                                               evidence_mode=evidence_mode)).validate(raw)
     except ValidationError as exc:
         raise ContractError(f"Invalid frame annotations: {exc.message}") from exc
     annotations = []
@@ -151,19 +178,28 @@ def build_annotations(raw, selected_frames, source, *, max_evidence_span_ms=1000
             require(claim["claim"].strip(), "Contextual claim cannot be blank")
             intervals = []
             for interval in claim["evidence_intervals"]:
-                start = _number(interval["start_ms"], "evidence interval start", minimum=0)
-                end = _number(interval["end_ms"], "evidence interval end", minimum=0)
-                require(start < end <= duration, "Evidence interval must have increasing endpoints within source duration")
+                locators = {}
+                if evidence_mode == FRAME_EVIDENCE:
+                    first, last = canonical[interval["start_frame_id"]], canonical[interval["end_frame_id"]]
+                    require(first["frame_index"] <= last["frame_index"],
+                            "Evidence frame endpoints must be in source order")
+                    start, end = first["timestamp_ms"], last["timestamp_ms"]
+                    locators = {"start_frame_id": first["frame_id"], "end_frame_id": last["frame_id"]}
+                else:
+                    start = _number(interval["start_ms"], "evidence interval start", minimum=0)
+                    end = _number(interval["end_ms"], "evidence interval end", minimum=0)
+                    require(start < end <= duration, "Evidence interval must have increasing endpoints within source duration")
                 require(end - start <= max_evidence_span_ms, "Evidence interval exceeds maximum evidence span")
                 observations = [copy.deepcopy(frame) for frame in canonical.values() if start <= frame["timestamp_ms"] <= end]
                 require(observations, "Evidence interval contains no actual source observations")
-                intervals.append({"start_ms": start, "end_ms": end, "supporting_frames": observations})
+                intervals.append({**locators, "start_ms": start, "end_ms": end, "supporting_frames": observations})
             claims.append({"claim": claim["claim"], "evidence_intervals": intervals})
         annotations.append({**copy.deepcopy(canonical[frame_id]),
                             "visible_observation": judgment["visible_observation"],
                             "visibility": judgment["visibility"], "contextual_claims": claims,
                             "uncertainties": copy.deepcopy(judgment["uncertainties"]),
                             "review_required": True, "training_eligible": False})
-    return {"schema_version": "contextual-frame-annotations-v1", "context_check": raw["context_check"],
+    return {"schema_version": ("contextual-frame-annotations-v2" if evidence_mode == FRAME_EVIDENCE
+                               else "contextual-frame-annotations-v1"), "context_check": raw["context_check"],
             "annotations": annotations, "clinical_validation": "not_performed", "training_eligible": False,
             "temporal_exposure": "retrospective_full_video", "evidence_validation": "locator_only_not_semantic"}

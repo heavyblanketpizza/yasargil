@@ -433,6 +433,27 @@ class MedGemmaReviewTests(unittest.TestCase):
             self.assertEqual(client.requests, [])
             self.assertFalse(self.output.exists())
 
+    def test_changed_frame_id_inventory_is_rejected_before_medgemma_runs(self):
+        path = self.annotation / "round-00/request.json"
+        request = read(path)
+        overview = json.loads(request["messages"][1]["content"][0]["text"])
+        overview["evidence_frame_inventory"]["rows"][-1][1] += 1000
+        request["messages"][1]["content"][0]["text"] = json.dumps(overview)
+        write(path, request)
+        client = FakeLlamaCpp()
+        with self.assertRaisesRegex(ContractError, "canonical evidence inventory"):
+            self.run_pass(client)
+        self.assertEqual(client.requests, [])
+        self.assertFalse(self.output.exists())
+
+    def test_legacy_timestamp_annotations_still_pass_review_intake(self):
+        qwen_fixtures.make_legacy_annotation(self.annotation)
+        original = read(self.annotation / "annotations.json")
+        client = FakeLlamaCpp()
+        self.assertEqual(self.run_pass(client)["status"], "completed")
+        self.assertEqual(read(self.output / "qwen/annotations.json"), original)
+        self.assertEqual(len(client.requests), len(self.selected_ids))
+
     def test_parent_context_conflict_remains_explicit_in_every_review_request(self):
         def conflicting(ids):
             output = qwen_fixtures.annotation_answer(ids)

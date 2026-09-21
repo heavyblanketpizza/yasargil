@@ -115,7 +115,8 @@ def build_surgery_evidence(source, annotations_document, *, dataset_root=None, p
         require(annotations_document.get("validation_status") != "rejected_temporal_citations",
                 "Rejected Qwen drafts cannot enter a normal validated review")
     require(isinstance(annotations_document, dict)
-            and annotations_document.get("schema_version") == "contextual-frame-annotations-v1",
+            and annotations_document.get("schema_version") in {
+                "contextual-frame-annotations-v1", "contextual-frame-annotations-v2"},
             "Expected a complete Qwen frame-annotation document")
     drafts = annotations_document.get("annotations")
     require(isinstance(drafts, list) and drafts and all(isinstance(draft, dict) for draft in drafts),

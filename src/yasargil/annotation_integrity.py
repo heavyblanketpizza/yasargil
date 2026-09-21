@@ -15,10 +15,10 @@ from pathlib import Path
 import re
 import tempfile
 
-from .annotation_contract import annotation_schema, build_annotations
 from .contract import ContractError, require, sha256_file
 from .frame_annotation import (
-    AnnotationConfig, _messages, _read, _validate_selection, _verified_result,
+    AnnotationConfig, _annotation_schema, _build_annotations, _messages, _protocol_hash,
+    _read, _validate_selection, _verified_result,
     normalized_annotation_config,
 )
 from .smart_selection import verify_assets
@@ -164,6 +164,9 @@ def _validated_evidence(output):
     names = _artifact_paths(output)
     before = _hashes(output, names)
     plan, session = _read(output / "run.json"), _read(output / "session.json")
+    protocol_version = plan.get("schema_version")
+    require(plan.get("protocol_sha256") == _protocol_hash(protocol_version),
+            "Annotation protocol differs from its frozen request")
     config = AnnotationConfig(**plan["config"])
     config.validate()
     require(normalized_annotation_config(session["config"]) == asdict(config),
@@ -183,13 +186,12 @@ def _validated_evidence(output):
     video_name = "video" + (Path(source["video_path"]).suffix.lower() or ".mp4")
     aliases = {frame["frame_id"]: f"frame-{index:08d}{Path(frame['image_path']).suffix.lower()}"
                for index, frame in enumerate(source["frames"])}
-    messages = _messages(source, selected, aliases, video_name, config)
-    schema = annotation_schema(frame_ids, source["duration_ms"], max_evidence_span_ms=config.max_evidence_span_ms)
+    messages = _messages(source, selected, aliases, video_name, config, protocol_version=protocol_version)
+    schema = _annotation_schema(plan, source)
     result = _verified_result(output / "round-00", source, messages, schema, config, video_name)
     _runtime_binding(output, result, source, config)
     verify_assets(source)
-    expected = build_annotations(result["output"], selected, source,
-                                 max_evidence_span_ms=config.max_evidence_span_ms)
+    expected = _build_annotations(result["output"], selected, source, plan)
     expected.update(session_id=session["session_id"], selection_run=plan["selection_run"],
                     selection_sha256=plan["input_sha256"]["selection.json"],
                     selected_frames_sha256=plan["input_sha256"]["selected-frames.json"],

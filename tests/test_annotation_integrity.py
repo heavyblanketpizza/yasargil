@@ -8,7 +8,7 @@ import shutil
 import unittest
 
 import test_frame_annotation as fixtures
-from yasargil.annotation_contract import build_annotations
+from yasargil.frame_annotation import _build_annotations
 from yasargil.annotation_integrity import MANIFEST_NAME, seal_annotation_output, verify_annotation_output
 from yasargil.contract import ContractError, sha256_file
 
@@ -38,9 +38,8 @@ class AnnotationIntegrityTests(unittest.TestCase):
             write(directory / f"{name}.json", result[name])
         write(directory / "result.json", result)
         current = read(self.output / "annotations.json")
-        built = build_annotations(result["output"], read(self.output / "selected-frames.json"),
-                                  read(self.output / "source/source.json"),
-                                  max_evidence_span_ms=self.fixture.config.max_evidence_span_ms)
+        built = _build_annotations(result["output"], read(self.output / "selected-frames.json"),
+                                   read(self.output / "source/source.json"), read(self.output / "run.json"))
         current.update(built, verification=result["verification"],
                        model_result_sha256=sha256_file(directory / "result.json"))
         write(self.output / "annotations.json", current)
@@ -285,6 +284,13 @@ class AnnotationIntegrityTests(unittest.TestCase):
         write(self.output / "round-00/annotation-context.json", session)
         plan["input_sha256"]["session.json"] = sha256_file(self.output / "session.json")
         write(self.output / "run.json", plan)
+        before = self.files()
+        sealed = seal_annotation_output(self.output)
+        self.assertEqual(verify_annotation_output(self.output), sealed)
+        self.assertEqual(before, {name: self.files()[name] for name in before})
+
+    def test_legacy_timestamp_run_can_still_be_sealed_without_rewriting_evidence(self):
+        fixtures.make_legacy_annotation(self.output)
         before = self.files()
         sealed = seal_annotation_output(self.output)
         self.assertEqual(verify_annotation_output(self.output), sealed)

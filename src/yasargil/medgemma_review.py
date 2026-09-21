@@ -14,10 +14,13 @@ import hashlib
 import json
 from pathlib import Path
 
-from .annotation_contract import annotation_schema, build_annotations
 from .checkpoint import atomic_bytes, atomic_json, directory_is_locked, directory_lock, durable_mkdir
 from .contract import ContractError, canonical_hash, require, sha256_file
-from .frame_annotation import AnnotationConfig, _verified_result
+from .frame_annotation import (
+    AnnotationConfig, LEGACY_PROTOCOL_VERSION, PROTOCOL_VERSION as ANNOTATION_PROTOCOL_VERSION,
+    _annotation_schema, _build_annotations, _messages as _annotation_messages,
+    _protocol_hash as _annotation_protocol_hash, _verified_result,
+)
 from .llama_video import _strict_json
 from .medgemma_evidence import build_evidence
 from .medgemma_review_contract import REVIEW_SYSTEM, build_review, review_schema
@@ -87,7 +90,7 @@ def _load_annotation(root):
     run. Its original request and complete-video receipts are the authority.
     """
     plan, summary = _read(root / "run.json"), _read(root / "summary.json")
-    require(plan.get("schema_version") == "full-video-frame-annotation-v1"
+    require(plan.get("schema_version") in {LEGACY_PROTOCOL_VERSION, ANNOTATION_PROTOCOL_VERSION}
             and summary.get("status") in {"completed", "context_conflict"},
             "MedGemma needs a finished Qwen annotation pass")
     for name, digest in plan["input_sha256"].items():
@@ -116,13 +119,15 @@ def _load_annotation(root):
              for index, f in enumerate(source["frames"])}
     require(blocks[1] == {"type": "input_video", "input_video": {"url": "file://" + video_name}}
             and blocks[2:-1] == _image_blocks(selected, names), "Qwen request omitted or changed visual evidence")
+    if plan["schema_version"] == ANNOTATION_PROTOCOL_VERSION:
+        require(messages == _annotation_messages(source, selected, names, video_name, config,
+                                                 protocol_version=plan["schema_version"])
+                and plan.get("protocol_sha256") == _annotation_protocol_hash(plan["schema_version"]),
+                "Qwen frame-ID request differs from its canonical evidence inventory or protocol")
     result = _verified_result(root / "round-00", source, messages,
-                              annotation_schema(ids, source["duration_ms"],
-                                                max_evidence_span_ms=config.max_evidence_span_ms),
-                              config, video_name)
+                              _annotation_schema(plan, source), config, video_name)
     annotations = _read(root / "annotations.json")
-    expected = build_annotations(result["output"], selected, source,
-                                 max_evidence_span_ms=config.max_evidence_span_ms)
+    expected = _build_annotations(result["output"], selected, source, plan)
     expected.update(session_id=session["session_id"], selection_run=plan["selection_run"],
                     selection_sha256=plan["input_sha256"]["selection.json"],
                     selected_frames_sha256=plan["input_sha256"]["selected-frames.json"],

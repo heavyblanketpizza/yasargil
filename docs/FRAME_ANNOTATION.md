@@ -8,7 +8,8 @@ does not select, drop, or retrieve more frames.
 
 The result separates a draft description of what is visible in each still from
 claims that depend on the surrounding video. Every contextual claim cites
-bounded time intervals linked to actual source observations. Source files,
+existing source frames; software resolves those references into bounded time
+intervals linked to actual source observations. Source files,
 timestamps, frame indices, and hashes remain attached throughout.
 
 **Qwen writes this descriptive text.** The original SOSpine annotations are
@@ -119,16 +120,34 @@ checks do not control the model's inference rate.
 | `visible_observation` | What Qwen proposes is directly visible in this selected still. Events elsewhere in the video must not be stated as visible here. |
 | `visibility` | `clear`, `partial`, `poor`, or `uninterpretable`. Poor or uninterpretable views require an uncertainty statement. |
 | `contextual_claims` | Up to three claims whose interpretation uses the surrounding video. An empty list is allowed. |
-| `evidence_intervals` | One to three bounded source-time intervals for each contextual claim. |
+| `evidence_intervals` | One to three source-frame ranges for each contextual claim. Qwen supplies `start_frame_id` and `end_frame_id`; software attaches `start_ms` and `end_ms`. |
 | `supporting_frames` | Canonical source observations within each interval, attached by the code with complete provenance. |
 | `uncertainties` | Ambiguities, limited visibility, or interpretations the model cannot establish. |
 | `review_required` / `training_eligible` | Always `true` / `false` for this model draft. |
 
 The model supplies annotation content keyed by the exact selected frame IDs.
 The code rejects missing or invented selected IDs and binds accepted content to
-the original canonical frame records. It also rejects inverted, out-of-range,
-overlong, or empty evidence intervals. Interval endpoints are inclusive: a
-source observation exactly at either endpoint is included.
+the original canonical frame records. For contextual evidence, the request
+provides a reference inventory covering **every source frame**, including frames
+outside the selected set. Qwen chooses `start_frame_id` and `end_frame_id` from
+that inventory instead of generating clock values. The response schema limits
+both fields to existing IDs, and the application checks the returned references
+again before looking up their authoritative timestamps.
+
+The code rejects unknown references, reversed ranges, and ranges exceeding
+`--max-evidence-span-ms`. Interval endpoints are inclusive: a source observation
+exactly at either endpoint is included. Choosing the same frame for both ends
+creates a point citation with equal timestamps and one supporting observation.
+This permits evidence at the final frame without inventing a later endpoint or
+implying that a still establishes an event's duration. A range identifies
+available evidence, not necessarily the full duration of the claimed action.
+
+New runs use `full-video-frame-annotation-v2`; their derived annotation document
+uses `contextual-frame-annotations-v2`. Saved v1 records retain their original
+model-written timestamps and remain available for read-only verification and
+review. Invalid historical citations are not repaired, clamped, or relabeled as
+v2 evidence. Start a separate output directory to obtain new source-reference
+annotations.
 
 These checks validate **source locators, not semantic truth**. A claim can cite a
 real frame and still be wrong. The output records
@@ -144,6 +163,15 @@ The existing native runtime checks all decoded source frame IDs, video hashes,
 and context truncation. Complete coverage is an input verification result; it
 does not establish that Qwen understood each frame or its timing correctly.
 The visual token budget still limits the detail available to the model.
+The source-reference inventory also consumes text context. Increasing source
+length must still fit the complete video, selected images, inventory, and answer
+within the configured context; the reference scheme does not relax the coverage
+or truncation checks.
+
+This change preserves the native video input, its existing frame grouping and
+timestamp-label settings, and all complete-source receipts. It prevents accepted
+citations from naming nonexistent coordinates. It does not establish that Qwen
+selected the correct moment or interpreted the event correctly.
 
 For SOSpine S6A3, the source is all **288 released JPEGs** reconstructed at the
 explicit nominal cadence of 1 fps: `288 / 1 = 288` seconds (4:48), with the last
@@ -180,10 +208,10 @@ checks the pinned source, selected frames, settings, prompt, and saved call
 receipts before reusing an accepted response. It does not save a model KV cache.
 An unfinished inference call may need to run again after interruption.
 
-Newly prepared runs receive the explicit media-timing instructions. Existing
+Newly prepared runs receive the source-reference citation protocol. Existing
 completed annotations retain their original prompts and outputs; resume does
-not rewrite them. Use a new output directory for an annotation run with the
-updated prompt.
+not rewrite them. Historical v1 evidence remains readable, but new inference
+requires a new v2 output directory.
 
 Open `report.html` in the output directory to inspect the frozen stills, visible
 drafts, contextual claims, uncertainty, supporting observations, and exact call
@@ -213,7 +241,8 @@ integrity, evidence intervals, uncertainty, failure handling, and recovery witho
 repeating accepted inference. Resume rejects changed runtime settings and
 internally inconsistent video-frame receipts. Timing checks cover conflicting
 repair metadata, reconstructed frame rates, media-derived duration and interval
-limits, and incompatible saved selection prompts.
+limits, source-reference membership and ordering, point citations, and
+incompatible saved selection prompts.
 
 Report checks cover model-text escaping, exact source/evidence links, the
 distinction between visible observations and video-context claims, frozen

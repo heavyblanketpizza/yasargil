@@ -197,6 +197,32 @@ class MedGemmaEvidenceTests(unittest.TestCase):
             with self.subTest(start=start, end=end), self.assertRaises(ContractError):
                 build_evidence(source, self.annotation(source, 8, [(start, end)]))
 
+    def test_frame_bound_point_evidence_includes_the_exact_last_source_frame(self):
+        source = self.source()
+        last = source["frames"][-1]
+        annotation = self.annotation(source, 8, [(last["timestamp_ms"], last["timestamp_ms"])])
+        interval = annotation["contextual_claims"][0]["evidence_intervals"][0]
+        interval.update(start_frame_id=last["frame_id"], end_frame_id=last["frame_id"])
+        evidence = build_evidence(source, annotation, max_context_frames=6)
+        coverage = evidence["qwen_evidence_coverage"][0]
+        self.assertEqual(coverage["available_frame_ids"], [last["frame_id"]])
+        self.assertEqual(coverage["supplied_frame_ids"], [last["frame_id"]])
+        self.assertEqual(coverage["start_frame_id"], coverage["end_frame_id"])
+        self.assertEqual(coverage["start_ms"], coverage["end_ms"])
+        self.assertTrue(coverage["complete"])
+
+    def test_frame_bound_evidence_rejects_mismatched_or_missing_endpoint_provenance(self):
+        source = self.source()
+        for changes in ({"start_frame_id": "missing", "end_frame_id": "f000002"},
+                        {"start_frame_id": "f000000"},
+                        {"start_frame_id": [], "end_frame_id": "f000002"},
+                        {"start_frame_id": "f000002", "end_frame_id": "f000000"},
+                        {"start_frame_id": "f000001", "end_frame_id": "f000002"}):
+            annotation = self.annotation(source, 8, [(0, 2000)])
+            annotation["contextual_claims"][0]["evidence_intervals"][0].update(changes)
+            with self.subTest(changes=changes), self.assertRaises(ContractError):
+                build_evidence(source, annotation)
+
     def test_sospine_exact_rows_raw_coordinates_and_table_receipts_are_preserved(self):
         source = self.source(count=6, case="S6A3")
         root = self.tables(source)

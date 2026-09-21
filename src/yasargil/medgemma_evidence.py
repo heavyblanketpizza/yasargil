@@ -148,15 +148,28 @@ def _intervals(annotation, canonical, duration):
             require(isinstance(interval, dict), "Invalid Qwen evidence interval")
             start = _number(interval.get("start_ms"), "Qwen evidence interval start", minimum=0)
             end = _number(interval.get("end_ms"), "Qwen evidence interval end", minimum=0)
-            require(start < end <= duration,
-                    "Qwen evidence interval must use increasing supplied-media timestamps")
+            endpoints = {}
+            if "start_frame_id" in interval or "end_frame_id" in interval:
+                first_id, last_id = interval.get("start_frame_id"), interval.get("end_frame_id")
+                require(isinstance(first_id, str) and isinstance(last_id, str)
+                        and first_id in canonical and last_id in canonical,
+                        "Qwen evidence endpoints must identify canonical source frames")
+                first, last = canonical[first_id], canonical[last_id]
+                require(first["frame_index"] <= last["frame_index"]
+                        and start == first["timestamp_ms"] and end == last["timestamp_ms"]
+                        and start <= end <= duration,
+                        "Qwen evidence timestamps differ from their canonical frame endpoints")
+                endpoints = {"start_frame_id": first_id, "end_frame_id": last_id}
+            else:
+                require(start < end <= duration,
+                        "Qwen evidence interval must use increasing supplied-media timestamps")
             actual = [frame for frame in canonical.values() if start <= frame["timestamp_ms"] <= end]
             require(actual, "Qwen evidence interval contains no source observations")
             if "supporting_frames" in interval:
                 require(interval["supporting_frames"] == actual,
                         "Qwen interval supporting frames differ from canonical source rows")
             intervals.append({"claim_index": claim_index, "interval_index": interval_index,
-                              "start_ms": start, "end_ms": end,
+                              **endpoints, "start_ms": start, "end_ms": end,
                               "available_frame_ids": [frame["frame_id"] for frame in actual]})
     return intervals
 

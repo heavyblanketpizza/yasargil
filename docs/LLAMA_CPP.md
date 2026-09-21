@@ -103,6 +103,15 @@ temporal citations have been unreliable, and early MedGemma reviews have made
 few substantive corrections. See the [research status](../README.md#research-status-and-known-limitations).
 Those protocol and quality investigations remain ongoing after the backend change.
 
+New [frame annotation](FRAME_ANNOTATION.md) requests address invented citation
+coordinates by asking Qwen for existing source-frame IDs, then resolving their
+timestamps in application code. The full source-reference inventory and enum
+constraints supplement the complete native video and selected stills. The
+runtime's `--video-fps 0`, 10,000 ms video timestamp-label interval, and native
+frame grouping remain unchanged. This is an application-level citation change,
+not a replacement video processor or a measured improvement in event localization.
+An existing frame can still be the wrong evidence for a claim.
+
 There is no Ollama client, backend selector or automatic fallback in the active
 inference path. The former `--ollama-url` and `models --pull` options are removed.
 Keep model/projector files independently under `.runtime/models/`; do not rely

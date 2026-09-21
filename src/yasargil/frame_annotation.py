@@ -15,7 +15,7 @@ import uuid
 
 from jsonschema import Draft202012Validator, ValidationError
 
-from .annotation_contract import annotation_schema, build_annotations
+from .annotation_contract import FRAME_EVIDENCE, TIMESTAMP_EVIDENCE, annotation_schema, build_annotations
 from .contract import ContractError, require, sha256_file
 from .llama_video import LocalVideoRuntime, RuntimeConfig, VideoRuntimeError, _strict_json
 from .smart_selection import (
@@ -25,8 +25,9 @@ from .smart_selection import (
 from .video_source import media_timeline, validate_native_timeline
 
 
-PROTOCOL_VERSION = "full-video-frame-annotation-v1"
-ANNOTATION_SYSTEM = """You annotate a FROZEN set of selected still frames using the COMPLETE native
+LEGACY_PROTOCOL_VERSION = "full-video-frame-annotation-v1"
+PROTOCOL_VERSION = "full-video-frame-annotation-v2"
+LEGACY_ANNOTATION_SYSTEM = """You annotate a FROZEN set of selected still frames using the COMPLETE native
 video for context. Watch the whole video and examine every supplied still before answering.
 This is a fresh annotation task: the frame list is final. Do not select, rank, drop, replace,
 or request additional frames. Return one annotation for EVERY specified frame ID.
@@ -54,6 +55,44 @@ context_check consistent, uncertain, or conflict when background is provided, or
 otherwise. All times are milliseconds on the documented source timeline. Copy frame IDs
 exactly. Source filenames and authoritative timestamps are attached by software, not authored
 by you. These annotations are drafts awaiting review. Return only the required JSON.""" + "\n\n" + TIMELINE_SYSTEM
+
+
+ANNOTATION_SYSTEM = """You annotate a FROZEN set of selected still frames using the COMPLETE native
+video for context. Watch the whole video and examine every supplied still before answering.
+This is a fresh annotation task: the frame list is final. Do not select, rank, drop, replace,
+or request additional target frames. Return one annotation for EVERY specified target frame ID.
+
+Keep two kinds of information explicitly separate:
+1. visible_observation: describe only what can be seen in THIS still. Mention concrete visual
+   details, relevant instrument/tissue positions, and visibility limits. A still alone does not
+   establish motion, the ordinal number of a stitch, successful repair, or a clinical outcome.
+2. contextual_claims: describe an interpretation supported by the surrounding VIDEO. Each
+   claim must cite narrow evidence_intervals using start_frame_id and end_frame_id copied
+   exactly from evidence_frame_inventory. This inventory covers ALL source frames, including
+   frames outside the selected targets. Its rows map an existing frame ID to its exact playback
+   timestamp in milliseconds; the timestamps help you locate frames but are not proof of events.
+
+Choose endpoints by matching visible evidence in the video. Include both endpoint frames and
+all source frames between them. The end must be at or after the start in source order. The
+difference between their inventory timestamps must not exceed maximum_evidence_interval_ms.
+For one observed frame, use the SAME frame ID for both endpoints: this is a point citation,
+not evidence of an action's duration. This is also valid for the final frame of the clip.
+Do not invent or calculate timestamps, frame IDs, unseen intermediate observations, or a
+boundary beyond the last frame. Do not put timecodes in descriptive text. Software attaches
+timestamps from the cited source rows. Never fill neat time windows merely to produce a citation.
+
+Context may explain visible evidence, but an event elsewhere in the video must never become
+something supposedly visible in this still. Do not infer anatomy, maneuvers, stitch counts,
+completion, safety, or treatment success from the documented procedure name. If you cannot
+locate supporting frames, omit the contextual claim. An empty contextual_claims list is valid.
+Report uncertainties explicitly; poor or uninterpretable views must include a limitation.
+Do not fill gaps with plausible surgical storytelling. If the video is not surgical, annotate
+the actual visible activity without imposing a surgical interpretation.
+
+Source context is documented background, not independent visual evidence. Return
+context_check consistent, uncertain, or conflict when background is provided, or not_supplied
+otherwise. Copy frame IDs exactly. Source filenames and authoritative timestamps are attached
+by software. These annotations are drafts awaiting review. Return only the required JSON.""" + "\n\n" + TIMELINE_SYSTEM
 
 
 @dataclass(frozen=True)
@@ -91,8 +130,31 @@ def _read(path):
         raise ContractError(f"Cannot read annotation evidence {path}: {exc}") from exc
 
 
-def _protocol_hash():
-    return hashlib.sha256((PROTOCOL_VERSION + ANNOTATION_SYSTEM).encode()).hexdigest()
+def _system(protocol_version):
+    require(protocol_version in (LEGACY_PROTOCOL_VERSION, PROTOCOL_VERSION), "Unsupported annotation protocol")
+    return LEGACY_ANNOTATION_SYSTEM if protocol_version == LEGACY_PROTOCOL_VERSION else ANNOTATION_SYSTEM
+
+
+def _protocol_hash(protocol_version=PROTOCOL_VERSION):
+    return hashlib.sha256((protocol_version + _system(protocol_version)).encode()).hexdigest()
+
+
+def _evidence_mode(plan):
+    version = plan.get("schema_version")
+    _system(version)
+    return FRAME_EVIDENCE if version == PROTOCOL_VERSION else TIMESTAMP_EVIDENCE
+
+
+def _annotation_schema(plan, source):
+    return annotation_schema(plan["frozen_frame_ids"], source["duration_ms"],
+                             max_evidence_span_ms=plan["config"]["max_evidence_span_ms"],
+                             source_frames=source["frames"], evidence_mode=_evidence_mode(plan))
+
+
+def _build_annotations(raw, selected, source, plan):
+    return build_annotations(raw, selected, source,
+                             max_evidence_span_ms=plan["config"]["max_evidence_span_ms"],
+                             evidence_mode=_evidence_mode(plan))
 
 
 def _validate_selection(directory, selection_run, *, snapshot=False):
@@ -198,7 +260,7 @@ def _prepare(selection_run, output, config):
         return plan
 
 
-def _messages(source, selected, names, video_name, config):
+def _messages(source, selected, names, video_name, config, *, protocol_version=PROTOCOL_VERSION):
     overview = {"task": "Annotate every final selected frame using direct visual evidence and complete-video context",
                 "verified_source_context": config.procedure_context.strip() or None,
                 "source_kind": source["source_kind"], "video_sha256": source["video_sha256"],
@@ -207,7 +269,12 @@ def _messages(source, selected, names, video_name, config):
                 "timestamp_basis": source["timestamp_basis"], "timestamp_units": "milliseconds",
                 "frame_ids": [f["frame_id"] for f in selected],
                 "maximum_evidence_interval_ms": config.max_evidence_span_ms}
-    return [{"role": "system", "content": ANNOTATION_SYSTEM}, {"role": "user", "content": [
+    if protocol_version == PROTOCOL_VERSION:
+        overview["evidence_frame_inventory"] = {
+            "columns": ["frame_id", "timestamp_ms"],
+            "rows": [[frame["frame_id"], frame["timestamp_ms"]] for frame in source["frames"]],
+        }
+    return [{"role": "system", "content": _system(protocol_version)}, {"role": "user", "content": [
         {"type": "text", "text": json.dumps(overview, ensure_ascii=False)},
         {"type": "input_video", "input_video": {"url": "file://" + video_name}},
         *_image_blocks(selected, names),
@@ -260,7 +327,7 @@ def _summary(output, plan, source, status, *, error=None):
         session = _read(output / "session.json")
     except ContractError:
         session = {}
-    summary = {"schema_version": PROTOCOL_VERSION, "status": status, "created_at": plan["created_at"],
+    summary = {"schema_version": plan["schema_version"], "status": status, "created_at": plan["created_at"],
                "updated_at": _now(), "config": plan["config"], "session_id": session.get("session_id"),
                "source": {key: source[key] for key in ("source_path", "video_path", "video_sha256", "duration_ms",
                                                        "expected_video_frames", "timestamp_basis")},
@@ -289,7 +356,8 @@ def run_annotation(selection_run, output_dir, config=None, *, resume=False, prep
         plan = _read(output / "run.json")
         source = _read(output / "source/source.json")
         try:
-            require(plan.get("schema_version") == PROTOCOL_VERSION and plan.get("protocol_sha256") == _protocol_hash(),
+            version = plan.get("schema_version")
+            require(plan.get("protocol_sha256") == _protocol_hash(version),
                     "Annotation protocol changed; begin a separate pass")
             if resume and selection_run is not None:
                 require(str(Path(selection_run).expanduser().resolve()) == plan["selection_run"], "Resume selection differs")
@@ -313,10 +381,11 @@ def run_annotation(selection_run, output_dir, config=None, *, resume=False, prep
             pause = lambda: should_stop() or (output / ".pause-requested").exists()
             if pause():
                 return _summary(output, plan, source, "paused")
+            require(version == PROTOCOL_VERSION or (output / "round-00/result.json").is_file(),
+                    "Legacy timestamp generation cannot resume; begin a new annotation pass with frame citations")
             media, video_name, names = stage_media(source, output)
-            messages = _messages(source, selected, names, video_name, config)
-            schema = annotation_schema(plan["frozen_frame_ids"], source["duration_ms"],
-                                       max_evidence_span_ms=config.max_evidence_span_ms)
+            messages = _messages(source, selected, names, video_name, config, protocol_version=version)
+            schema = _annotation_schema(plan, source)
             directory = output / "round-00"
             _summary(output, plan, source, "running")
             if not (directory / "result.json").exists():
@@ -335,8 +404,7 @@ def run_annotation(selection_run, output_dir, config=None, *, resume=False, prep
                     runtime.chat(messages, schema=schema, max_tokens=config.max_tokens, round_dir=directory)
             result = _verified_result(directory, source, messages, schema, config, video_name)
             verify_assets(source)
-            annotations = build_annotations(result["output"], selected, source,
-                                            max_evidence_span_ms=config.max_evidence_span_ms)
+            annotations = _build_annotations(result["output"], selected, source, plan)
             annotations.update(session_id=_read(output / "session.json")["session_id"],
                                selection_run=plan["selection_run"],
                                selection_sha256=plan["input_sha256"]["selection.json"],

@@ -23,7 +23,7 @@ from .annotation_contract import _number, annotation_schema
 from .annotation_integrity import _FROZEN, _hashes, _transport_binding
 from .contract import ContractError, require
 from .frame_annotation import (
-    AnnotationConfig, PROTOCOL_VERSION, _messages, _read, _validate_selection,
+    AnnotationConfig, LEGACY_PROTOCOL_VERSION, _messages, _read, _validate_selection,
     normalized_annotation_config,
 )
 from .llama_video import _strict_json
@@ -204,7 +204,8 @@ def _load(root):
     names = _paths(root)
     before = _hashes(root, names)
     plan, session = _read(root / "run.json"), _read(root / "session.json")
-    require(plan.get("schema_version") == PROTOCOL_VERSION, "Unsupported Qwen annotation protocol")
+    require(plan.get("schema_version") == LEGACY_PROTOCOL_VERSION,
+            "Rejected timestamp intake supports only the legacy Qwen annotation protocol")
     config = AnnotationConfig(**plan["config"])
     config.validate()
     require(normalized_annotation_config(session.get("config")) == asdict(config),
@@ -224,7 +225,8 @@ def _load(root):
     video_name = "video" + (Path(source["video_path"]).suffix.lower() or ".mp4")
     names_by_id = {frame["frame_id"]: f"frame-{index:08d}{Path(frame['image_path']).suffix.lower()}"
                    for index, frame in enumerate(source["frames"])}
-    messages = _messages(source, selected, names_by_id, video_name, config)
+    messages = _messages(source, selected, names_by_id, video_name, config,
+                         protocol_version=LEGACY_PROTOCOL_VERSION)
     require(request == {
         "model": "qwen-video", "messages": messages, "max_tokens": config.max_tokens,
         "temperature": 0.1, "seed": 42, "stream": False, "cache_prompt": True, "id_slot": 0,
@@ -232,7 +234,7 @@ def _load(root):
         "response_format": {"type": "json_schema", "json_schema": {
             "name": "frame_selection", "strict": True, "schema": schema}}},
         "Saved Qwen request differs from its complete original annotation configuration")
-    require(plan.get("protocol_sha256") == hashlib.sha256((PROTOCOL_VERSION + messages[0]["content"]).encode()).hexdigest(),
+    require(plan.get("protocol_sha256") == hashlib.sha256((LEGACY_PROTOCOL_VERSION + messages[0]["content"]).encode()).hexdigest(),
             "Qwen annotation prompt policy changed")
     response = _read(root / "round-00/response.json")
     choices = response.get("choices")

@@ -116,6 +116,21 @@ class MedGemmaSurgeryContractTests(unittest.TestCase):
         batch["frames"][0]["timestamp_ms"] = 9000
         self.assertEqual((self.source, self.document), before)
 
+    def test_v2_point_evidence_uses_only_the_canonical_selected_endpoint(self):
+        self.document["schema_version"] = "contextual-frame-annotations-v2"
+        last = self.source["frames"][-1]
+        interval = {"start_frame_id": last["frame_id"], "end_frame_id": last["frame_id"],
+                    "start_ms": last["timestamp_ms"], "end_ms": last["timestamp_ms"],
+                    "supporting_frames": [copy.deepcopy(last)]}
+        self.document["annotations"][0]["contextual_claims"][0]["evidence_intervals"] = [interval]
+        batch = self.batch()
+        coverage = batch["qwen_evidence_coverage"][self.ids[0]][0]
+        self.assertEqual(coverage["available_frame_ids"], [last["frame_id"]])
+        self.assertEqual(coverage["supplied_frame_ids"], [last["frame_id"]])
+        self.assertTrue(coverage["complete"])
+        self.assertEqual(batch["qwen_annotations"], self.document["annotations"])
+        self.assertEqual(len(batch["frames"]), len(self.ids))
+
     def test_target_adapter_uses_all_selected_frames_and_per_target_roles(self):
         batch = self.batch()
         packet = target_evidence(batch, self.ids[1])

@@ -112,6 +112,18 @@ class InspectorTests(unittest.TestCase):
         record_id = store.records()["records"][0]["id"]
         return store, record_id
 
+    def test_v2_frame_bound_annotations_remain_visible_in_the_inspector(self):
+        self.annotation_plan["schema_version"] = "full-video-frame-annotation-v2"
+        write(self.annotation / "run.json", self.annotation_plan)
+        self.annotation_data["schema_version"] = "contextual-frame-annotations-v2"
+        self.annotation_data["annotations"][0]["contextual_claims"] = [{"claim": "Source evidence.",
+            "evidence_intervals": [{"start_frame_id": "f4", "end_frame_id": "f4",
+                "start_ms": 4000, "end_ms": 4000, "supporting_frames": [self.frames[-1]]}]}]
+        write(self.annotation / "annotations.json", self.annotation_data)
+        store, record_id = self.store()
+        detail = store.frame(record_id, "f0")
+        self.assertEqual(detail["qwen"], self.annotation_data["annotations"][0])
+
     def test_full_canonical_timeline_and_protected_drop_semantics(self):
         store, record_id = self.store()
         summary = store.records()["records"]
