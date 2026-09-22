@@ -28,6 +28,10 @@ from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_ope
 
 from jsonschema import Draft202012Validator
 
+from .qwen_runtime import verified_qwen_runtime
+from .qwen_sampling import qwen_non_thinking_parameters, qwen_sampling_receipt, verify_qwen_sampling
+from .qwen_video_protocol import VIDEO_PROTOCOL, verify_qwen_video_protocol
+
 
 class VideoRuntimeError(RuntimeError):
     """An incomplete or unverifiable inference must not become a selection."""
@@ -41,7 +45,6 @@ class RuntimeConfig:
     context_size: int = 65536
     image_max_tokens: int = 256
     port: int = 0
-    video_timestamp_interval_ms: int = 10000
     startup_timeout: float = 180
     request_timeout: float = 3600
 
@@ -225,7 +228,6 @@ class LocalVideoRuntime:
             ("context_size", config.context_size, 1, 262144),
             ("image_max_tokens", config.image_max_tokens, 64, 16384),
             ("port", config.port, 0, 65535),
-            ("video_timestamp_interval_ms", config.video_timestamp_interval_ms, 1, 3600000),
             ("expected_video_frames", expected_video_frames, 1, 100000000),
         ):
             if type(value) is not int or not lower <= value <= upper:
@@ -247,6 +249,7 @@ class LocalVideoRuntime:
         self._round_count = 0
         self._video_sha256 = None
         self._ffmpeg_transport = None
+        self._source_fps = None
         self._transport_receipt_dir = None
         self.base_url = ""
         self.command: list[str] = []
@@ -275,7 +278,10 @@ class LocalVideoRuntime:
         if log_path.exists():
             raise VideoRuntimeError(f"Refusing to replace an existing server log: {log_path}")
         root = self.config.project_root.expanduser().resolve()
-        binary = root / ".runtime/llama.cpp/b10809/llama-server"
+        try:
+            binary, build_receipt = verified_qwen_runtime(root)
+        except ValueError as error:
+            raise VideoRuntimeError(str(error)) from error
         model = root / ".runtime/models/qwen3.8-27b-q4_k_m.gguf"
         projector = root / ".runtime/models/qwen3.8-27b-mmproj-bf16.gguf"
         for path in (binary, model, projector):
@@ -292,9 +298,10 @@ class LocalVideoRuntime:
         native_decode = verify_native_video_decode(
             self.video_path, ffmpeg=ffmpeg, ffprobe=ffprobe,
             expected_video_frames=self.expected_video_frames, output_dir=self.log_dir / "native-decode")
+        self._source_fps = float(Fraction(native_decode["source_r_frame_rate"]))
         version = subprocess.check_output([str(binary), "--version"], text=True, stderr=subprocess.STDOUT)
-        if not re.search(r"\b10809\b", version):
-            raise VideoRuntimeError("This verifier requires the pinned llama.cpp b10809 build.")
+        if not re.search(r"\b10809\b", version) or "qwenref1" not in version:
+            raise VideoRuntimeError("This verifier requires the pinned Qwen reference runtime build.")
         with socket.socket() as probe:
             probe.bind(("127.0.0.1", self.config.port))
             port = probe.getsockname()[1]
@@ -304,7 +311,7 @@ class LocalVideoRuntime:
             str(binary), "-m", str(model), "--mmproj", str(projector),
             "--alias", "qwen-video", "--host", "127.0.0.1", "--port", str(port),
             "--parallel", "1", "--media-path", str(self.media_path),
-            "--video-fps", "0", "--video-timestamp-interval", str(self.config.video_timestamp_interval_ms),
+            "--video-fps", "0",
             "--video-ffmpeg-dir", str(Path(ffmpeg).parent),
             "--image-min-tokens", "64", "--image-max-tokens", str(self.config.image_max_tokens),
             "-c", str(self.config.context_size), "-ngl", "all", "-fa", "on", "--fit", "off",
@@ -317,6 +324,8 @@ class LocalVideoRuntime:
         _save(self.log_dir / "runtime.json", {
             "started_at": datetime.now(timezone.utc).isoformat(), "command": self.command,
             "binary_version": version, "setup_manifest": setup,
+            "qwen_runtime_build": build_receipt, "video_protocol": VIDEO_PROTOCOL,
+            "sampling_profile": qwen_sampling_receipt(),
             "model": {"path": str(model), "resolved_path": str(model.resolve()), "bytes": model.stat().st_size},
             "projector": {"path": str(projector), "resolved_path": str(projector.resolve()), "bytes": projector.stat().st_size},
             "model_hash_note": "Digests are recorded from the existing setup manifest; not rehashed by this runtime.",
@@ -442,7 +451,9 @@ class LocalVideoRuntime:
             raise VideoRuntimeError("Refusing to overwrite existing round evidence.")
         request = {
             "model": "qwen-video", "messages": deepcopy(messages), "max_tokens": max_tokens,
-            "temperature": 0.1, "seed": 42, "stream": False,
+            **qwen_non_thinking_parameters(), "stream": False,
+            "samplers": ["penalties", "temperature", "top_k", "top_p", "min_p"],
+            "samplers_generated_only": True, "repeat_last_n": max_tokens,
             "cache_prompt": True, "id_slot": 0,
             "chat_template_kwargs": {"enable_thinking": False},
             "response_format": {"type": "json_schema", "json_schema": {
@@ -462,6 +473,9 @@ class LocalVideoRuntime:
             "message_count": len(messages), "prior_history_preserved": self._previous_messages is not None,
             "request_sha256": hashlib.sha256(payload).hexdigest(), "log_start_byte": offset,
             "full_source_video_verified": False, "accepted": False,
+            "sampling_profile": {**qwen_sampling_receipt(),
+                                 "samplers": request["samplers"],
+                                 "samplers_generated_only": True, "repeat_last_n": max_tokens},
         }
         try:
             with self._http.open(Request(self.base_url + "/v1/chat/completions", data=payload,
@@ -509,6 +523,18 @@ class LocalVideoRuntime:
                                      "vision_encoding_reuse_verified": False}
             if not verified:
                 raise VideoRuntimeError(f"Complete video decoding was not verified: expected {self.expected_video_frames} contiguous frame IDs, received {len(frame_ids)}.")
+            still_count = sum(part.get("type") == "image_url" for message in messages
+                              if isinstance(message.get("content"), list) for part in message["content"])
+            try:
+                verification["qwen_video_protocol"] = verify_qwen_video_protocol(
+                    segment, frame_count=self.expected_video_frames, fps=self._source_fps,
+                    still_count=still_count)
+            except (ValueError, TypeError) as error:
+                raise VideoRuntimeError(f"Qwen video presentation verification failed: {error}") from error
+            try:
+                verification["sampling_profile"] = verify_qwen_sampling(segment, max_tokens)
+            except ValueError as error:
+                raise VideoRuntimeError(f"Qwen generation settings verification failed: {error}") from error
             if any(truncations) or re.search(r"\bcontext shift:|\btruncating (?:the )?prompt", segment, re.IGNORECASE):
                 raise VideoRuntimeError("The server truncated or shifted the context; the answer is rejected.")
             if choice.get("finish_reason") != "stop":

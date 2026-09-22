@@ -28,6 +28,10 @@ From the Yasargil project directory, install optional encoder dependencies if ne
 uv sync --extra selection
 ```
 
+Before inference, build the [pinned Qwen complete-video runtime](LLAMA_CPP.md#build-the-qwen-complete-video-runtime).
+It is separate from the original release used by the standalone
+`scripts/qwen_video.py` experiment. Missing or changed build artifacts stop startup.
+
 Prepare all source frames and embedding candidates without starting Qwen:
 
 ```sh
@@ -113,7 +117,7 @@ stills in one fresh conversation and one review call. All candidates are judged
 together against earlier and later video context. A summary never replaces the
 video, and the candidate IDs remain frozen throughout the review.
 
-The pinned llama.cpp **b10809** runtime uses `--video-fps 0`. Upstream still applies
+The pinned **b10809-qwen-reference-v1** runtime uses `--video-fps 0`. Upstream still applies
 an FPS filter internally, so this flag alone is insufficient evidence of complete
 input. This workflow verifies:
 
@@ -122,6 +126,16 @@ input. This workflow verifies:
    decode without that filter, with the expected frame count.
 3. Each Qwen request logs every expected decoded frame ID, in order.
 4. Generation finishes successfully without context truncation.
+5. The actual tokenizer stream groups `(0,1)`, `(2,3)`, and subsequent source
+   pairs with a mean-time label before every pair. An odd final frame is repeated
+   inside its pair only; source counts and timestamps do not gain another frame.
+
+The shared runtime also uses Qwen's explicit non-thinking sampling values:
+temperature `0.7`, top-p `0.8`, top-k `20`, min-p `0.0`, presence penalty `1.5`,
+and repetition penalty `1.0`. Penalties consider only generated tokens across
+the complete output budget. Temperature precedes the top-k/top-p filters.
+Requests and effective sampler logs are retained and checked; see
+[runtime setup and verification limits](LLAMA_CPP.md#build-the-qwen-complete-video-runtime).
 
 Variable-frame-rate inputs, multiple video streams, and any native filter that
 drops, duplicates, or reorders frames are rejected. The source is not retimed to
@@ -134,6 +148,8 @@ stills, and answer cannot fit, the run fails.
 Complete frame coverage does not mean unlimited visual resolution: the model's
 image-token budget still limits visible detail. This path processes visual
 evidence; it does not add audio transcription.
+Matching frame/time-label organization and generation controls does not establish
+pixel equivalence with Transformers or better selection accuracy.
 
 ## Timestamps, provenance, and keep/drop decisions
 
@@ -189,7 +205,7 @@ missing-evidence experiment.
 | `initial-selection.json`, `embeddings/` | Candidate scores, protected anchors, encoder identity, feature cache |
 | `native-timeline-verification.json` | Source PTS compatibility check |
 | `runtime/attempt-*/native-decode/`, `runtime/attempt-*/runtime.json` | Native/unfiltered RGB verification and runtime settings for each server start |
-| `rounds/round-00/` | Fixed candidate manifest, exact request/response, verification, result |
+| `rounds/round-00/` | Fixed candidate manifest, exact request/response, coverage and frame-pair/sampling verification, result |
 | `selection.json` | Effective selection, model decisions, coverage overrides, provenance, empty unresolved-search list |
 | `selection.html` | Human review with thumbnails, keep/drop decisions, timestamps, source paths and hashes |
 | `last-error.json` | Most recent failed or interrupted attempt, when present |

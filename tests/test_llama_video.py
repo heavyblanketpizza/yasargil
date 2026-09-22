@@ -38,6 +38,7 @@ class NativeVideoTests(unittest.TestCase):
         self.runtime._server = Mock()
         self.runtime._server.poll.return_value = None
         self.runtime._video_sha256 = _sha256(self.media / "video.mkv")
+        self.runtime._source_fps = 1.0
         self.runtime._http = Mock()
         self.runtime.base_url = "http://127.0.0.1:12345"
         self.messages = [{"role": "system", "content": "Use verified procedure context."},
@@ -52,12 +53,27 @@ class NativeVideoTests(unittest.TestCase):
                                  "prompt_tokens_details": {"cached_tokens": 0}},
                        "timings": {"cache_n": 0}, "system_fingerprint": "b10809-test"}
 
-    def response(self, result=None, frame_ids=(0, 1, 2), extra_log=""):
+    def response(self, result=None, frame_ids=(0, 1, 2), extra_log="", sampler_log=True):
         result = self.result if result is None else result
         def receive(request, timeout):
             with self.log.open("a") as handle:
                 for frame in frame_ids:
                     handle.write(f"0.00.000 D read_next_frame: frame {frame} read OK\n")
+                handle.write('I YASARGIL_QWEN_VIDEO_REFERENCE_V1 mode {"temporal_patch_size":2,"timestamp_position":"before_pair","odd_padding":"repeat_last_frame","fps":1}\n')
+                for i, pair in enumerate(([0, 1], [2, 2])):
+                    seconds = sum(pair) / 2
+                    label = f"<{seconds:.1f} seconds>"
+                    group = {"group_index": i, "frame_indices": pair, "padded": i == 1,
+                             "timestamp_seconds": seconds, "label": label}
+                    handle.write("D YASARGIL_QWEN_VIDEO_REFERENCE_V1 group " + json.dumps(group) + "\n")
+                    handle.write(f"D add_text: {label}\nD add_media: preproc_out has 2 entries, grid_x = 0\n")
+                handle.write("D add_media: preproc_out has 1 entries, grid_x = 0\n")
+                if sampler_log:
+                    handle.write("I sampler chain: logits -> penalties -> temp-ext -> top-k -> top-p -> ?min-p -> dist\n")
+                    handle.write("I sampler params:\n")
+                    handle.write("\trepeat_last_n = 100, repeat_penalty = 1.000, frequency_penalty = 0.000, presence_penalty = 1.500\n")
+                    handle.write("\ttop_k = 20, top_p = 0.800, min_p = 0.000, temp = 0.700\n")
+                    handle.write("\tsamplers_generated_only = 1, sampler_history_scope = generated\n")
                 handle.write("0.01.000 I slot release: stop processing: n_tokens = 1020, truncated = 0\n")
                 handle.write(extra_log)
             return io.BytesIO(result if isinstance(result, bytes) else json.dumps(result).encode())
@@ -81,11 +97,25 @@ class NativeVideoTests(unittest.TestCase):
         self.assertEqual(payload["response_format"]["json_schema"]["schema"], SCHEMA)
         self.assertTrue(payload["cache_prompt"])
         self.assertFalse(payload["chat_template_kwargs"]["enable_thinking"])
+        self.assertEqual(payload["temperature"], 0.7)
+        self.assertEqual(payload["presence_penalty"], 1.5)
+        self.assertTrue(payload["samplers_generated_only"])
+        self.assertEqual(payload["repeat_last_n"], 100)
+        self.assertEqual(payload["samplers"], ["penalties", "temperature", "top_k", "top_p", "min_p"])
+        self.assertTrue(result["verification"]["qwen_video_protocol"]["tokenizer_stream_verified"])
+        self.assertTrue(result["verification"]["sampling_profile"]["verified"])
         self.assertTrue(result["verification"]["full_source_video_verified"])
         self.assertEqual(result["verification"]["decoded_frame_ids"], [0, 1, 2])
         self.assertEqual(json.loads((self.root / "round0/result.json").read_text()), result)
         self.assertEqual(result["response"]["choices"][0]["message"]["content"], self.result["choices"][0]["message"]["content"])
         self.assertNotIn("startup log", (self.root / "round0/server-segment.log").read_text())
+
+    def test_requested_settings_without_effective_sampler_evidence_are_rejected(self):
+        self.response(sampler_log=False)
+        with self.assertRaisesRegex(VideoRuntimeError, "generation settings verification failed"):
+            self.call()
+        self.assertTrue((self.root / "round0/response.json").is_file())
+        self.assertFalse((self.root / "round0/result.json").exists())
 
     def test_later_round_keeps_video_history_and_reports_actual_cache(self):
         self.response()
@@ -238,8 +268,9 @@ class NativeVideoTests(unittest.TestCase):
         server = Mock()
         server.poll.return_value = 1
         with patch("yasargil.llama_video.shutil.which", side_effect=lambda name: "/fake/bin/" + name), \
-             patch("yasargil.llama_video.subprocess.check_output", return_value="version: 10809 (5266f24da)"), \
-             patch("yasargil.llama_video.verify_native_video_decode", return_value={"video_sha256": "f" * 64}), \
+             patch("yasargil.llama_video.subprocess.check_output", return_value="version: 10809 (5266f24da-qwenref1)"), \
+             patch("yasargil.llama_video.verified_qwen_runtime", return_value=(runtime_dir / "llama-server", {})), \
+             patch("yasargil.llama_video.verify_native_video_decode", return_value={"video_sha256": "f" * 64, "source_r_frame_rate": "1"}), \
              patch("yasargil.llama_video.subprocess.Popen", return_value=server), \
              patch("yasargil.llama_video.socket.socket") as socket_factory:
             socket_factory.return_value.__enter__.return_value.getsockname.return_value = ("127.0.0.1", 12345)
@@ -269,8 +300,9 @@ class NativeVideoTests(unittest.TestCase):
         server = Mock()
         server.poll.return_value = 1
         with patch("yasargil.ffmpeg_transport.transport_metadata", return_value=metadata), \
-             patch("yasargil.llama_video.subprocess.check_output", return_value="version: 10809"), \
-             patch("yasargil.llama_video.verify_native_video_decode", return_value={"video_sha256": "f" * 64}) as preflight, \
+             patch("yasargil.llama_video.subprocess.check_output", return_value="version: 10809 (5266f24da-qwenref1)"), \
+             patch("yasargil.llama_video.verified_qwen_runtime", return_value=(runtime_dir / "llama-server", {})), \
+             patch("yasargil.llama_video.verify_native_video_decode", return_value={"video_sha256": "f" * 64, "source_r_frame_rate": "1"}) as preflight, \
              patch("yasargil.llama_video.subprocess.Popen", return_value=server) as popen, \
              patch("yasargil.llama_video.socket.socket") as socket_factory:
             socket_factory.return_value.__enter__.return_value.getsockname.return_value = ("127.0.0.1", 12345)

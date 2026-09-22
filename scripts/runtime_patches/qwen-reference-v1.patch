@@ -1,0 +1,343 @@
+--- a/tools/mtmd/mtmd-helper.cpp
++++ b/tools/mtmd/mtmd-helper.cpp
+@@ -604,6 +604,22 @@
+     std::string pending_text; // text queued to be returned before the next frame
+     bool        start_emitted = false;
+ 
++    // Keep each pair adjacent: timestamp text between its bitmaps would stop
++    // mtmd's temporal merger. RAII also covers aborted lazy callbacks.
++    bool qwen_video_reference = false;
++    double timestamp_fps = 0.0;
++    mtmd::bitmap_ptr qwen_pending_frames[2];
++    size_t qwen_pending_index = 2;
++    int32_t qwen_group_index = 0;
++    bool frame_read_error = false;
++
++    void configure_video_format() {
++        qwen_video_reference = mtmd_uses_qwen3_video_reference(mctx);
++        if (qwen_video_reference) {
++            LOG_INF("YASARGIL_QWEN_VIDEO_REFERENCE_V1 mode {\"temporal_patch_size\":2,\"timestamp_position\":\"before_pair\",\"odd_padding\":\"repeat_last_frame\",\"fps\":%.17g}\n", timestamp_fps);
++        }
++    }
++
+     bool is_buf_input() const {
+         return !input_buf.empty();
+     }
+@@ -641,6 +657,7 @@
+         uint32_t width  = 0;
+         uint32_t height = 0;
+         float orig_fps = 0.0f;
++        double orig_timestamp_fps = 0.0;
+         float duration = -1.0f;
+         int32_t n_frames_orig = -1;
+         char line[256];
+@@ -661,6 +678,7 @@
+                 height = (uint32_t)atoi(val);
+             } else if (strcmp(key, "r_frame_rate") == 0) {
+                 orig_fps = parse_rational(val);
++                orig_timestamp_fps = parse_rational_double(val);
+             } else if (strcmp(key, "nb_frames") == 0 && strcmp(val, "N/A") != 0) {
+                 n_frames_orig = atoi(val);
+             } else if (strcmp(key, "duration") == 0 && strcmp(val, "N/A") != 0) {
+@@ -679,6 +697,9 @@
+         }
+ 
+         fps_target = fps_target_arg > 0.0f ? fps_target_arg : orig_fps;
++        // Preserve reference double-precision timestamp arithmetic without
++        // altering the pinned native decoder's float FPS filter.
++        timestamp_fps = fps_target_arg > 0.0f ? static_cast<double>(fps_target_arg) : orig_timestamp_fps;
+         info.width    = width;
+         info.height   = height;
+         info.fps      = fps_target;
+@@ -778,6 +799,7 @@
+                 // clean EOF only if no bytes read yet; partial frame is an error
+                 LOG_DBG("%s: fread returned 0 after %zu/%zu bytes (ferror=%d)\n",
+                         __func__, total_read, frame_size, ferror(fp));
++                frame_read_error = total_read != 0 || ferror(fp) != 0;
+                 sp.alive = false;
+                 return nullptr;
+             }
+@@ -791,9 +813,57 @@
+         return frame;
+     }
+ 
++    int32_t read_next_qwen(mtmd_bitmap ** out_bitmap, char ** out_text) {
++        // An odd final pair discovers EOF before its saved bitmaps are emitted.
++        if (qwen_pending_index < 2) {
++            *out_bitmap = qwen_pending_frames[qwen_pending_index++].release();
++            return 0;
++        }
++        if (!sp.alive) {
++            return frame_read_error || current_frame == 0 ? -2 : -1;
++        }
++
++        const int32_t first_index = current_frame;
++        qwen_pending_frames[0].reset(read_next_frame());
++        if (!qwen_pending_frames[0]) {
++            return frame_read_error || current_frame == 0 ? -2 : -1;
++        }
++        qwen_pending_frames[1].reset(read_next_frame());
++        if (frame_read_error) {
++            return -2;
++        }
++        const bool padded = !qwen_pending_frames[1];
++        const int32_t last_index = padded ? first_index : first_index + 1;
++        if (padded) {
++            // Match the reference's odd temporal-patch padding. This is not
++            // another source decode and never increments current_frame.
++            const mtmd_bitmap * last = qwen_pending_frames[0].get();
++            qwen_pending_frames[1].reset(mtmd_bitmap_init(
++                mtmd_bitmap_get_nx(last), mtmd_bitmap_get_ny(last), mtmd_bitmap_get_data(last)));
++            mtmd_bitmap_set_mergeable(qwen_pending_frames[1].get(), true);
++        }
++
++        // Match Qwen3VLProcessor._calculate_timestamps, then its .1f format.
++        const double seconds = (first_index / timestamp_fps + last_index / timestamp_fps) / 2.0;
++        char label[64];
++        snprintf(label, sizeof(label), "<%.1f seconds>", seconds);
++        *out_text = strdup(label);
++        if (!*out_text) {
++            return -2;
++        }
++        qwen_pending_index = 0;
++        LOG_DBG("YASARGIL_QWEN_VIDEO_REFERENCE_V1 group {\"group_index\":%d,\"frame_indices\":[%d,%d],\"padded\":%s,\"timestamp_seconds\":%.17g,\"label\":\"%s\"}\n",
++                qwen_group_index++, first_index, last_index, padded ? "true" : "false", seconds, label);
++        return 0;
++    }
++
+     int32_t read_next(mtmd_bitmap ** out_bitmap, char ** out_text) {
+         *out_bitmap = nullptr;
+         *out_text   = nullptr;
++
++        if (qwen_video_reference) {
++            return read_next_qwen(out_bitmap, out_text);
++        }
+ 
+         if (!pending_text.empty()) {
+             *out_text = strdup(pending_text.c_str());
+@@ -837,6 +907,15 @@
+         return 0;
+     }
+ 
++    static double parse_rational_double(const char * s) {
++        int num = 0, den = 1;
++        if (sscanf(s, "%d/%d", &num, &den) == 2 && den > 0) {
++            return static_cast<double>(num) / den;
++        }
++        double val;
++        return sscanf(s, "%lf", &val) == 1 ? val : 0.0;
++    }
++
+     static float parse_rational(const char * s) {
+         int num = 0, den = 1;
+         if (sscanf(s, "%d/%d", &num, &den) == 2 && den > 0) {
+@@ -931,6 +1010,8 @@
+         return nullptr;
+     }
+ 
++    ctx->configure_video_format();
++
+     if (!ctx->start_ffmpeg(0.0f)) {
+         LOG_ERR("%s: failed to start ffmpeg for '%s' (is ffmpeg in PATH?)\n", __func__, path);
+         delete ctx;
+@@ -965,6 +1046,8 @@
+         delete ctx;
+         return nullptr;
+     }
++
++    ctx->configure_video_format();
+ 
+     if (!ctx->start_ffmpeg(0.0f)) {
+         LOG_ERR("%s: failed to start ffmpeg on buffer (is ffmpeg in PATH?)\n", __func__);
+--- a/tools/mtmd/mtmd.cpp
++++ b/tools/mtmd/mtmd.cpp
+@@ -2191,6 +2191,10 @@
+ 
+ bool mtmd_support_vision(const mtmd_context * ctx) {
+     return ctx->ctx_v != nullptr;
++}
++
++bool mtmd_uses_qwen3_video_reference(const mtmd_context * ctx) {
++    return ctx && ctx->ctx_v && ctx->proj_type_v() == PROJECTOR_TYPE_QWEN3VL;
+ }
+ 
+ bool mtmd_support_audio(const mtmd_context * ctx) {
+--- a/tools/mtmd/mtmd.h
++++ b/tools/mtmd/mtmd.h
+@@ -145,6 +145,10 @@
+ 
+ // whether the current model supports vision input
+ MTMD_API bool mtmd_support_vision(const mtmd_context * ctx);
++
++// Qwen3-VL (including Qwen3.5/3.8) uses timestamp-prefixed temporal pairs.
++// Public so mtmd-helper does not depend on internal projector headers.
++MTMD_API bool mtmd_uses_qwen3_video_reference(const mtmd_context * ctx);
+ 
+ // whether the current model supports audio input
+ MTMD_API bool mtmd_support_audio(const mtmd_context * ctx);
+--- a/common/common.h
++++ b/common/common.h
+@@ -253,6 +253,7 @@
+     bool    ignore_eos         = false;
+     bool    no_perf            = false;  // disable performance metrics
+     bool    timing_per_token   = false;
++    bool    samplers_generated_only = false; // exclude prompt tokens from sampler chain history
+ 
+     uint64_t user_sampling_config = 0; // bitfield to track user-specified samplers
+ 
+--- a/common/sampling.cpp
++++ b/common/sampling.cpp
+@@ -175,11 +175,13 @@
+             "\trepeat_last_n = %d, repeat_penalty = %.3f, frequency_penalty = %.3f, presence_penalty = %.3f\n"
+             "\tdry_multiplier = %.3f, dry_base = %.3f, dry_allowed_length = %d, dry_penalty_last_n = %d\n"
+             "\ttop_k = %d, top_p = %.3f, min_p = %.3f, xtc_probability = %.3f, xtc_threshold = %.3f, typical_p = %.3f, top_n_sigma = %.3f, temp = %.3f\n"
+-            "\tmirostat = %d, mirostat_lr = %.3f, mirostat_ent = %.3f, adaptive_target = %.3f, adaptive_decay = %.3f",
++            "\tmirostat = %d, mirostat_lr = %.3f, mirostat_ent = %.3f, adaptive_target = %.3f, adaptive_decay = %.3f\n"
++            "\tsamplers_generated_only = %d, sampler_history_scope = %s",
+             penalty_last_n, penalty_repeat, penalty_freq, penalty_present,
+             dry_multiplier, dry_base, dry_allowed_length, dry_penalty_last_n,
+             top_k, top_p, min_p, xtc_probability, xtc_threshold, typ_p, top_n_sigma, temp,
+-            mirostat, mirostat_eta, mirostat_tau, adaptive_target, adaptive_decay);
++            mirostat, mirostat_eta, mirostat_tau, adaptive_target, adaptive_decay,
++            samplers_generated_only, samplers_generated_only ? "generated" : "prompt_and_generated");
+ 
+     return std::string(result);
+ }
+@@ -493,7 +495,9 @@
+         llama_sampler_accept(gsmpl->grmr, token);
+     }
+ 
+-    llama_sampler_accept(gsmpl->chain, token);
++    if (is_generated || !gsmpl->params.samplers_generated_only) {
++        llama_sampler_accept(gsmpl->chain, token);
++    }
+ 
+     gsmpl->prev.push_back(token);
+ }
+--- a/tools/server/server-schema.cpp
++++ b/tools/server/server-schema.cpp
+@@ -126,6 +126,9 @@
+     add((new field_num("repeat_last_n", params.sampling.penalty_last_n))
+         ->set_hard_limits(0, INT32_MAX)
+         ->set_desc("Last n tokens to consider for penalizing repetition (0 = disabled)"));
++
++    add((new field_bool("samplers_generated_only", params.sampling.samplers_generated_only))
++        ->set_desc("Exclude prompt tokens from sampler chain history; grammar and token tracking are unchanged"));
+ 
+     add((new field_num("repeat_penalty", params.sampling.penalty_repeat))
+         ->set_desc("Control the repetition of token sequences in the generated text (1.0 = disabled)"));
+--- a/tools/server/server-task.cpp
++++ b/tools/server/server-task.cpp
+@@ -53,6 +53,8 @@
+             {"xtc_threshold",             sampling.xtc_threshold},
+             {"typical_p",                 sampling.typ_p},
+             {"repeat_last_n",             sampling.penalty_last_n},
++            {"samplers_generated_only",   sampling.samplers_generated_only},
++            {"sampler_history_scope",     sampling.samplers_generated_only ? "generated" : "prompt_and_generated"},
+             {"repeat_penalty",            sampling.penalty_repeat},
+             {"presence_penalty",          sampling.penalty_present},
+             {"frequency_penalty",         sampling.penalty_freq},
+@@ -105,6 +107,8 @@
+         {"xtc_threshold",             sampling.xtc_threshold},
+         {"typical_p",                 sampling.typ_p},
+         {"repeat_last_n",             sampling.penalty_last_n},
++        {"samplers_generated_only",   sampling.samplers_generated_only},
++        {"sampler_history_scope",     sampling.samplers_generated_only ? "generated" : "prompt_and_generated"},
+         {"repeat_penalty",            sampling.penalty_repeat},
+         {"presence_penalty",          sampling.penalty_present},
+         {"frequency_penalty",         sampling.penalty_freq},
+--- a/tests/test-sampling.cpp
++++ b/tests/test-sampling.cpp
+@@ -1,5 +1,7 @@
+ #include "ggml.h"
+ #include "llama.h"
++#include "common.h"
++#include "sampling.h"
+ 
+ #ifdef NDEBUG
+ #undef NDEBUG
+@@ -185,6 +187,68 @@
+     DUMP(&tester.cur_p);
+ 
+     tester.check();
++}
++
++static void check_common_presence(common_sampler * sampler, llama_token token, float expected) {
++    llama_sampler * chain = common_sampler_get(sampler);
++    for (int i = 0; i < llama_sampler_chain_n(chain); ++i) {
++        llama_sampler * penalty = llama_sampler_chain_get(chain, i);
++        if (std::string(llama_sampler_name(penalty)) != "penalties") {
++            continue;
++        }
++        llama_token_data value = { token, 2.0f, 0.0f };
++        llama_token_data_array values = { &value, 1, -1, false };
++        llama_sampler_apply(penalty, &values);
++        GGML_ASSERT(fabsf(value.logit - expected) < 1e-6f);
++        return;
++    }
++    GGML_ABORT("presence penalty sampler missing");
++}
++
++static void test_generated_history(const char * model_path) {
++    auto model_params = llama_model_default_params();
++    model_params.vocab_only = true;
++    model_params.n_gpu_layers = 0;
++    llama_model * model = llama_model_load_from_file(model_path, model_params);
++    GGML_ASSERT(model != nullptr);
++    GGML_ASSERT(llama_vocab_n_tokens(llama_model_get_vocab(model)) >= 3);
++
++    for (bool generated_only : { false, true }) {
++        common_params_sampling params;
++        GGML_ASSERT(!params.samplers_generated_only);
++        params.samplers_generated_only = generated_only;
++        params.penalty_last_n = 128;
++        params.penalty_present = 1.5f;
++        params.samplers = { COMMON_SAMPLER_TYPE_PENALTIES };
++        common_sampler * sampler = common_sampler_init(model, params);
++
++        common_sampler_accept(sampler, 0, false);
++        GGML_ASSERT(common_sampler_last(sampler) == 0);
++        check_common_presence(sampler, 0, generated_only ? 2.0f : 0.5f);
++
++        common_sampler_accept(sampler, 1, true);
++        for (int i = 0; i < 96; ++i) {
++            common_sampler_accept(sampler, 2, true);
++        }
++        check_common_presence(sampler, 1, 0.5f);
++
++        common_sampler * cloned = common_sampler_clone(sampler);
++        common_sampler * copied = common_sampler_init(model, params);
++        common_sampler_copy(sampler, copied);
++        common_sampler_reset(sampler);
++        check_common_presence(sampler, 1, 2.0f);
++        for (common_sampler * saved : { cloned, copied }) {
++            check_common_presence(saved, 1, 0.5f);
++            common_sampler_accept(saved, 0, false);
++            check_common_presence(saved, 0, generated_only ? 2.0f : 0.5f);
++            common_sampler_free(saved);
++        }
++        common_sampler_accept(sampler, 0, false);
++        check_common_presence(sampler, 0, generated_only ? 2.0f : 0.5f);
++        common_sampler_free(sampler);
++    }
++    llama_model_free(model);
++    printf("generated-only sampler history: passed\n");
+ }
+ 
+ static void test_dry(
+@@ -334,8 +398,14 @@
+     BENCH(llama_sampler_init_xtc    (1.0f, 0.1f, 1, 1),       data, 32);
+ }
+ 
+-int main(void) {
++int main(int argc, char ** argv) {
+     ggml_time_init();
++
++    if (argc == 3 && std::string(argv[1]) == "--test-generated-history") {
++        test_generated_history(argv[2]);
++        return 0;
++    }
++    GGML_ASSERT(argc == 1);
+ 
+     test_dist_singleton_rng();
+ 

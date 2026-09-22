@@ -1,8 +1,8 @@
 # Local inference with llama.cpp
 
-llama.cpp is Yasargil's only Qwen/MedGemma generation backend. Qwen's native-video selection
-and annotation paths and independent MedGemma annotation all use
-the pinned local runtime. Each workflow owns its local server and stops it
+llama.cpp is Yasargil's only Qwen/MedGemma generation backend. Qwen's complete-video
+workflows use a separately pinned, locally patched build; independent MedGemma
+annotation retains the original release build. Each workflow owns its local server and stops it
 when its inference work finishes; an always-on service is unnecessary.
 
 [Complete-video frame selection](SMART_FRAME_SELECTION.md) requires every
@@ -15,16 +15,19 @@ The standalone video experiment below samples at its configured FPS.
 
 ## Runtime and model setup
 
-Install the pinned llama.cpp runtime in `.runtime/llama.cpp/b10809/` and matching
+Install the original llama.cpp release in `.runtime/llama.cpp/b10809/`, build the
+Qwen complete-video runtime as described below, and supply matching
 model/projector pairs at the paths below. Runtime binaries, models and datasets
 are excluded from the repository. Obtain them separately under their upstream
 terms and verify publisher checksums.
 
 | Component | Location / version |
 | --- | --- |
-| llama.cpp | `.runtime/llama.cpp/b10809/` |
+| Original llama.cpp release | `.runtime/llama.cpp/b10809/` |
+| Qwen complete-video build | `.runtime/llama.cpp/b10809-qwen-reference-v1/bin/llama-server` |
 | Release selection | Stable `v0.4.0`; its `nightly-tag.txt` points to `b10809` |
-| Binary version | `0.4.0-dev`, build `10809`, commit `5266f24da` |
+| Original binary version | `0.4.0-dev`, build `10809`, commit `5266f24da` |
+| Patched Qwen identity | Same base commit, with `qwenref1` in its version and a hashed build receipt |
 | Release archive | `.runtime/llama-b10809-bin-macos-arm64.tar.gz` |
 | Video decoder | Homebrew FFmpeg `9.0.1` (`9.0.1_1` package), `/opt/homebrew/bin/ffmpeg` |
 | Qwen alias | `qwen3.8-27b` |
@@ -61,6 +64,63 @@ MedGemma uses the pinned runtime's built-in Gemma formatter with
 `--no-jinja --chat-template gemma`. This avoids a Jinja grammar-prefill failure
 while preserving image markers and JSON-schema constraints. Qwen retains its
 model-provided Jinja template. These launch settings are part of runtime identity.
+
+## Build the Qwen complete-video runtime
+
+Selection, annotation, and other callers of `LocalVideoRuntime` require the
+separate `b10809-qwen-reference-v1` build. On the supported Apple Silicon setup,
+the builder needs CMake and the Xcode command-line compiler tools. If CMake is
+not already installed, it can be installed inside the project:
+
+```sh
+uv pip install --target .runtime/build-deps cmake==3.31.6
+.venv/bin/python scripts/build_qwen_runtime.py --jobs 8
+```
+
+The builder also accepts `--cmake /path/to/cmake`; use
+`.venv/bin/python scripts/build_qwen_runtime.py --help` for its options. It
+downloads the pinned upstream source archive, checks its SHA-256, applies
+`scripts/runtime_patches/qwen-reference-v1.patch`, and builds the server with
+Metal and video support. It leaves the original release and model files in place.
+Before reusing extracted sources, it checks every source file against a fresh
+archive-plus-patch copy. Local differences stop the build and are preserved.
+`build-receipt.json` records the source and patch identity and built artifact
+hashes. Startup rejects a missing, outdated, or changed build rather than falling
+back to the original processor. `runtime.json` retains the accepted build receipt;
+the ordinary `models` inspection command still describes the release/image path.
+
+The patch changes two parts of the shared Qwen complete-video path:
+
+- **Frame pairs and time labels:** adjacent source frames form `(0,1)`, `(2,3)`,
+  and so on. Every pair is preceded by its mean media timestamp, formatted like
+  `<0.5 seconds>` for the first pair at 1 fps. An odd final frame is repeated
+  inside its temporal pair, without creating an additional source frame or
+  extending the timeline. Selected stills remain separate. The old trailing
+  labels at ten-second boundaries are not used in this path.
+- **Non-thinking generation:** requests explicitly set temperature `0.7`, top-p
+  `0.8`, top-k `20`, min-p `0.0`, presence penalty `1.5`, and repetition penalty
+  `1.0`, following [Qwen's recommendation](https://huggingface.co/Qwen/Qwen3.8-27B#best-practices).
+  Frequency penalty is `0.0` and the seed remains `42`. Penalty history contains
+  generated tokens only and covers the complete output budget. The sampler
+  applies penalties, then temperature, then top-k/top-p/min-p filters.
+
+Per-request logs and verification receipts check the actual pair/label stream
+and effective generation controls. These checks target the two identified
+mismatches; they do not establish pixel-for-pixel equivalence with Transformers,
+identical results across inference backends, or improved surgical accuracy.
+Image-token budgets and all source-frame coverage checks remain in force.
+Use a fresh output directory for comparisons; historical requests and outputs
+retain their original processing and settings.
+
+The focused live check uses tiny synthetic clips and a separate still:
+
+```sh
+.venv/bin/python scripts/runtime_tests/live_qwen_video.py --output outputs/runtime_checks/new-live-check
+```
+
+Choose an unused output directory. This loads the real local Qwen model, checks
+even/odd frame counts and a follow-up conversation, and saves raw responses and
+verification receipts. It is not an annotation-quality evaluation.
 
 ## Migration from Ollama
 
@@ -107,9 +167,10 @@ New [frame annotation](FRAME_ANNOTATION.md) requests address invented citation
 coordinates by asking Qwen for existing source-frame IDs, then resolving their
 timestamps in application code. The full source-reference inventory and enum
 constraints supplement the complete native video and selected stills. The
-runtime's `--video-fps 0`, 10,000 ms video timestamp-label interval, and native
-frame grouping remain unchanged. This is an application-level citation change,
-not a replacement video processor or a measured improvement in event localization.
+runtime still uses `--video-fps 0` and verifies every source frame. The later
+[Qwen runtime patch](#build-the-qwen-complete-video-runtime) separately corrects
+frame grouping, time-label placement, and generation controls. Source-frame
+citations prevent invented coordinates; they do not establish event localization.
 An existing frame can still be the wrong evidence for a claim.
 
 There is no Ollama client, backend selector or automatic fallback in the active
@@ -147,6 +208,10 @@ historical records can still pass export only after all ordinary human-review,
 eligibility and partition gates. Backend migration grants no review approval.
 
 ## Run a video
+
+This standalone experiment still uses the **original b10809 release** and its
+older processor/settings. It does not exercise the patched complete-video
+selection/annotation path described above.
 
 From the project directory:
 

@@ -30,7 +30,9 @@ removed; their saved outputs remain historical evidence.
 Use the same local llama.cpp and Qwen installation as
 [complete-video frame selection](SMART_FRAME_SELECTION.md). This command consumes
 an existing final selection; it does not rerun the embedding selector.
-See [runtime setup and migration history](LLAMA_CPP.md#migration-from-ollama).
+Build the [pinned Qwen complete-video runtime](LLAMA_CPP.md#build-the-qwen-complete-video-runtime)
+before starting inference. The old standalone `scripts/qwen_video.py` experiment
+does not exercise this processor.
 
 Prepare a new annotation run without starting Qwen:
 
@@ -164,10 +166,23 @@ length must still fit the complete video, selected images, inventory, and answer
 within the configured context; the reference scheme does not relax the coverage
 or truncation checks.
 
-This change preserves the native video input, its existing frame grouping and
-timestamp-label settings, and all complete-source receipts. It prevents accepted
-citations from naming nonexistent coordinates. It does not establish that Qwen
-selected the correct moment or interpreted the event correctly.
+The shared runtime groups adjacent source frames in pairs, with a mean-time
+label before each pair: `(0,1)` follows `<0.5 seconds>` for a 1 fps source.
+An odd final frame is repeated only to fill its temporal pair; it is not an
+additional source observation. The selected stills remain separate. Logs verify
+the actual pair/label stream alongside complete-source decoding and truncation
+checks. This replaces the original processor's shifted grouping and trailing
+ten-second labels.
+
+Non-thinking generation explicitly uses temperature `0.7`, top-p `0.8`, top-k
+`20`, min-p `0.0`, presence penalty `1.5`, and repetition penalty `1.0`.
+Generated-token-only penalty history covers the output budget, and temperature
+is applied before the top-k/top-p filters. See the
+[shared runtime settings and limits](LLAMA_CPP.md#build-the-qwen-complete-video-runtime).
+These changes align the two identified processing differences; they do not
+establish Transformers pixel equivalence or correct interpretations. Source-frame
+citations separately prevent nonexistent coordinates, without proving that Qwen
+selected the correct moment.
 
 For SOSpine S6A3, the source is all **288 released JPEGs** reconstructed at the
 explicit nominal cadence of 1 fps: `288 / 1 = 288` seconds (4:48), with the last
@@ -223,7 +238,7 @@ annotations are labeled as pending.
 | `selected-frames.json` | Frozen final selected frames with canonical provenance |
 | `native-timeline-verification.json` | Source timeline compatibility check |
 | `runtime/attempt-*/` | Native decoding verification, runtime metadata, and server logs |
-| `round-00/request.json`, `response.json`, `result.json`, `verification.json` | Exact request, raw response, accepted result, and complete-video checks |
+| `round-00/request.json`, `response.json`, `result.json`, `verification.json` | Exact request, raw response, accepted result, complete-video checks, and frame-pair/sampling receipts |
 | `annotations.json` | Contextual annotation records, supporting source observations, and review restrictions |
 | `integrity.json` | Completion checksums for exact evidence bytes, produced by the scoped pair runner |
 | `summary.json` | Current status, selected count, timestamps, and session identity |
