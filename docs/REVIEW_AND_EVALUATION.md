@@ -54,7 +54,7 @@ annotation](MEDGEMMA_FRAME_ANNOTATION.md) uses target-centered source-image pack
 without seeing Qwen drafts. Both produce separate proposals; neither by itself
 satisfies the v2 reviewed-export gates described here.
 
-New inference code for both workflows now uses llama.cpp. See [Migration from Ollama](LLAMA_CPP.md#migration-from-ollama) for the reasons and local setup/live-validation status. Preserve historical Ollama artifacts and their runtime provenance; the read-only verifier does not convert them. New llama.cpp runs require new output directories, and a backend change alone establishes neither better annotation quality nor reviewed training eligibility.
+New inference code for both workflows now uses llama.cpp. See [Migration from Ollama](LLAMA_CPP.md#migration-from-ollama) for runtime setup and compatibility requirements. Preserve historical Ollama artifacts and their runtime provenance; the read-only verifier does not convert them. New llama.cpp runs require new output directories, and a backend change alone establishes neither better annotation quality nor reviewed training eligibility.
 
 ## Review rubric
 

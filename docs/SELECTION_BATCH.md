@@ -9,8 +9,8 @@ it cannot request additional frames or replacements.
 
 Each selection uses Qwen through local llama.cpp and excludes the original
 tool-label/coordinate CSV rows from its request. The later annotation pass
-writes new descriptive text. See [runtime setup and migration status](LLAMA_CPP.md#migration-from-ollama)
-for the switch from Ollama and ongoing validation.
+writes new descriptive text. See [runtime setup and compatibility](LLAMA_CPP.md#migration-from-ollama)
+for the switch from Ollama and installation requirements.
 
 The inspected release contains 24 sequences. Obtain a separate copy as described
 in [Data sources](DATA_SOURCES.md). Complete input coverage means

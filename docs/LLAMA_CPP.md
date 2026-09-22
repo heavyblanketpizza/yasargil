@@ -124,22 +124,9 @@ verification receipts. It is not an annotation-quality evaluation.
 
 ## Migration from Ollama
 
-**Status as of 19 September 2026:** llama.cpp is the active Qwen/MedGemma
-inference backend, and both independent model/projector pairs are installed
-locally. Qwen and MedGemma have each passed an ordered-image smoke call with a
-structured response. A complete three-call enhancement run also passed using
-synthetic source data, covering Qwen proposal, independent MedGemma observation,
-and MedGemma review with retained artifacts. That enhancement runner has since
-been removed. Qwen native-video runs have also
-executed locally. These checks establish working input and response paths; they do not establish
-completion or quality of an independent surgical annotation run on this backend.
-
-The transition happened in stages: complete-video selection, annotation and
-gap experiments already used llama.cpp. The old image-review workflows migrated
-next and were later replaced by independent MedGemma annotation. DINO frame embeddings
-and Hugging Face/Unsloth training keep their separate execution paths.
-
-The reasons for the change are:
+Qwen and MedGemma inference uses llama.cpp. DINO frame embeddings and
+Hugging Face/Unsloth training keep their separate execution paths. The inference
+backend provides:
 
 - **Native video input for Qwen.** Selection and annotation can send an
   `input_video` item and selected stills in the same request. The former Ollama
@@ -183,19 +170,6 @@ it requires an explicit, verified conversion of metadata and embedded vision
 tensors. Confirm model inspection and image inference before removing any
 separate runtime or cache installation. The migration does not uninstall the
 Ollama application or delete its cache.
-
-The local migration stores Qwen as independent model/projector files. The
-installed combined MedGemma GGUF is split with a retained conversion helper at
-`.runtime/migrations/medgemma-split/split_medgemma.py`. That directory also retains
-the upstream source used to verify the mapping. The receipt at
-`.runtime/models/medgemma-split-provenance.json` records the original file hash,
-helper/source hashes, tensor mapping, metadata changes and every output tensor
-hash. The converter preserves language weights and tokenizer bytes, renames the
-vision tensors and promotes only the vision patch/position embeddings from F16
-to F32 without losing values. Existing normalization shifts are preserved.
-It validates both outputs before publishing their final filenames and leaves
-the source blob unchanged. These local migration artifacts are excluded from Git;
-other installations can supply a compatible upstream model/projector pair.
 
 Historical Ollama requests, responses and archives retain their original bytes
 and provenance. They are not converted or relabeled as llama.cpp calls, and an

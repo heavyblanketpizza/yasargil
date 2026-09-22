@@ -180,15 +180,21 @@ See [MedGemma annotation](MEDGEMMA_FRAME_ANNOTATION.md), [Frame selection](SMART
 and [Training](TRAINING.md).
 
 New inference uses local llama.cpp. Dataset files and original CSV values are
-unchanged by the backend migration; see [runtime setup and migration status](LLAMA_CPP.md#migration-from-ollama).
+unchanged by the backend migration; see [runtime setup and compatibility](LLAMA_CPP.md#migration-from-ollama).
 
 These derived outputs may contain original images, copied CSV rows, reviewer
 identifiers, and machine paths. Keep them local too. `outputs/` is ignored for
 convenience, and raw data/media/export formats are ignored throughout the repo.
-Internal planning notes, research reports, work logs, and the source-derived
-inventory have been moved to private storage outside the repository. Public
-examples use placeholder paths; tests generate synthetic data in temporary
-directories. Fonts are resolved from the local system and are not bundled.
+Keep internal planning notes, coding-agent instructions, private research reports,
+work logs, and source-derived inventories outside version control. Public examples
+use placeholder paths; tests generate synthetic data in temporary directories.
+Fonts are resolved from the local system and are not bundled.
+
+The Markdown allowlist admits specific filenames, not every kind of content
+inside them. Review public documentation for session-specific run directories,
+authorization or notification arrangements, local installation status, and
+private migration records before committing. Keep those details in private notes;
+public guides should describe reusable setup, commands, behavior, and limitations.
 
 Before a commit, run `python3 scripts/check_repo_hygiene.py`; after staging,
 run `python3 scripts/check_repo_hygiene.py --staged`. CI runs the same current-tree

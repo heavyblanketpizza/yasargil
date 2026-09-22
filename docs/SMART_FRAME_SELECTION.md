@@ -9,7 +9,7 @@ This Qwen path supplies the video, candidate stills, source locators, and
 optional documented procedure background; it does not supply SOSpine's original
 tool-label/coordinate CSV rows. New descriptive annotations are written in the
 subsequent annotation pass. For why the project moved from Ollama to llama.cpp
-and which migration checks remain in progress, see [runtime migration](LLAMA_CPP.md#migration-from-ollama).
+and runtime compatibility requirements, see [runtime migration](LLAMA_CPP.md#migration-from-ollama).
 
 After a completed selection, [frame annotation](FRAME_ANNOTATION.md) freezes the
 final stills and starts a fresh Qwen session with the complete video. It separates

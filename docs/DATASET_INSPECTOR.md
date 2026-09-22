@@ -174,7 +174,7 @@ existing formal review or training-export gates.
 The interface uses bundled HTML, CSS, and JavaScript without remote dependencies.
 Current generation code uses local llama.cpp; historical saved Ollama artifacts
 retain their original runtime identity. The inspector itself only reads these
-artifacts. See [runtime migration status](LLAMA_CPP.md#migration-from-ollama).
+artifacts. See [runtime setup and compatibility](LLAMA_CPP.md#migration-from-ollama).
 The server binds only to `127.0.0.1`, serves explicitly registered media/artifacts,
 supports video byte ranges, and saves human curation separately from source
 artifacts. Source drives must

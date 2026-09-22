@@ -76,27 +76,28 @@ coverage; it does not remove source frames. A timeout is a maximum waiting
 period, not an expected completion time. Historical saved configurations without
 the timeout field continue to mean 3,600 seconds.
 
-## Automatic annotation of the first two selections
+## Annotate an S2A2/S1A2 pair
 
-The scoped runner waits until both S2A2 and S1A2 have completed keep/drop
-selection and the selection worker has released its lock. It then annotates
-them serially, each with a fresh full-video conversation, and verifies the saved
-artifacts. The remaining 22 sequences stay pending.
+The pair runner requires S2A2 and S1A2 as the first two entries in the selection
+queue, with all other entries still pending. It waits until both selections are
+complete and the selection worker has released its lock, then annotates them
+serially with a fresh full-video conversation for each case and verifies the
+saved artifacts.
 
 ```sh
 .venv/bin/python -m yasargil.annotation_pair \
-  --selection-batch outputs/selection_batches/SOSpine_keep_drop_20260915 \
-  --output-dir outputs/annotation_pairs/SOSpine_first_two_20260915 \
+  --selection-batch outputs/selection_batches/example-batch \
+  --output-dir outputs/annotation_pairs/example-pair \
   --prepare-only
 
 .venv/bin/python -m yasargil.annotation_pair \
-  --output-dir outputs/annotation_pairs/SOSpine_first_two_20260915 --resume
+  --output-dir outputs/annotation_pairs/example-pair --resume
 ```
 
 The pair's `run.json` pins its scope, settings, annotation prompt, and selection
 queue. Its `state.json` records waiting/running/completed status and each case's
 result. Each case has its own `S2A2/` or `S1A2/` directory. A case failure is
-saved before proceeding to the other authorized case; failed calls are not
+saved before proceeding to the other configured case; failed calls are not
 automatically retried. Explicit resume preserves interrupted evidence and
 verifies finished artifacts before skipping completed cases.
 
@@ -108,8 +109,7 @@ video remain at their recorded paths; a manifest does not replace those media.
 
 To pause the pair before its next call, create `.pause-requested` in the pair
 output directory. An active call finishes and saves its evidence. Remove that
-sentinel before an explicitly requested resume. The separate hourly notification
-checks do not control the model's inference rate.
+sentinel before resuming the pair.
 
 ## What each annotation contains
 

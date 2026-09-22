@@ -108,7 +108,7 @@ After checking the real exports and preflight report in the chosen training envi
 trainer.train()
 ```
 
-No training was run while implementing this interface. A constructed trainer and successful CPU tests are not evidence that a particular HF model, processor, CUDA environment or surgical task has been validated.
+Trainer construction and successful CPU tests do not establish model/processor/CUDA compatibility or surgical-task performance. Validate the interface with the actual model, processor, and training environment before starting a full run.
 
 ## Supervision and integrity checks
 
