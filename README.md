@@ -118,7 +118,7 @@ Run `python3 scripts/check_repo_hygiene.py --staged` after staging changes.
 ## License
 
 Original code, schemas, tests, and documentation use [Apache 2.0](LICENSE).
-Copyright 2026 Yasargil contributors.
+Copyright 2026 [heavyblanketpizza](https://github.com/heavyblanketpizza).
 
 Datasets, model weights, and external runtimes retain their own terms. SOSpine's
 conflicting license notices are documented in [Data sources](docs/DATA_SOURCES.md).
