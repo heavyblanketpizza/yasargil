@@ -27,6 +27,7 @@ PUBLIC_MARKDOWN = {
     "docs/ENHANCEMENT.md",
     "docs/FRAME_ANNOTATION.md",
     "docs/GAP_EXPERIMENT.md",
+    "docs/HOW_QWEN_UNDERSTANDS_VIDEO.md",
     "docs/LLAMA_CPP.md",
     "docs/MEDGEMMA_FRAME_ANNOTATION.md",
     "docs/MEDGEMMA_FRAME_REVIEW.md",
@@ -35,7 +36,12 @@ PUBLIC_MARKDOWN = {
     "docs/SMART_FRAME_SELECTION.md",
     "docs/TRAINING.md",
 }
-PUBLIC_MEDIA = {"docs/assets/yasargil-banner.webp"}
+PUBLIC_MEDIA = {
+    "docs/assets/yasargil-banner.webp",
+    "docs/assets/qwen-video-guide-patches.png",
+    "docs/assets/qwen-video-guide-reasoning.png",
+    "docs/assets/qwen-video-guide-pairing.png",
+}
 # Keep path exceptions and excluded formats aligned with .gitignore.
 PUBLIC_ARTIFACTS = {
     "schemas/enhancement-record.schema.json",

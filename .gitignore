@@ -41,6 +41,7 @@ __[pP][yY][cC][aA][cC][hH][eE]__/
 !/docs/ENHANCEMENT.md
 !/docs/FRAME_ANNOTATION.md
 !/docs/GAP_EXPERIMENT.md
+!/docs/HOW_QWEN_UNDERSTANDS_VIDEO.md
 !/docs/LLAMA_CPP.md
 !/docs/MEDGEMMA_FRAME_ANNOTATION.md
 !/docs/MEDGEMMA_FRAME_REVIEW.md
@@ -167,5 +168,8 @@ __[pP][yY][cC][aA][cC][hH][eE]__/
 *.[xX][zZ]
 *.[zZ][iI][pP]
 
-# Reviewed README artwork; no other source or dataset media is admitted.
+# Reviewed documentation artwork; no other source or dataset media is admitted.
 !/docs/assets/yasargil-banner.webp
+!/docs/assets/qwen-video-guide-patches.png
+!/docs/assets/qwen-video-guide-reasoning.png
+!/docs/assets/qwen-video-guide-pairing.png

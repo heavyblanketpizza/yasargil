@@ -99,6 +99,7 @@ and the [annotation evaluation plan](docs/MEDGEMMA_FRAME_ANNOTATION.md#evaluate-
 
 ## More guides
 
+- [How Qwen3.8-27B understands video](docs/HOW_QWEN_UNDERSTANDS_VIDEO.md)
 - [Selection batches](docs/SELECTION_BATCH.md) and [gap experiments](docs/GAP_EXPERIMENT.md)
 - [Dataset format and export rules](docs/DATASET_CONTRACT.md)
 - [Human review and evaluation](docs/REVIEW_AND_EVALUATION.md)
