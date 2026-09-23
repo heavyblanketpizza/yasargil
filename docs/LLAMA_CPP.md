@@ -97,12 +97,20 @@ The patch changes two parts of the shared Qwen complete-video path:
   inside its temporal pair, without creating an additional source frame or
   extending the timeline. Selected stills remain separate. The old trailing
   labels at ten-second boundaries are not used in this path.
-- **Non-thinking generation:** requests explicitly set temperature `0.7`, top-p
+- **Generation sampling:** requests explicitly set temperature `0.7`, top-p
   `0.8`, top-k `20`, min-p `0.0`, presence penalty `1.5`, and repetition penalty
-  `1.0`, following [Qwen's recommendation](https://huggingface.co/Qwen/Qwen3.8-27B#best-practices).
+  `1.0`, following [Qwen's non-thinking recommendation](https://huggingface.co/Qwen/Qwen3.8-27B#best-practices).
   Frequency penalty is `0.0` and the seed remains `42`. Penalty history contains
   generated tokens only and covers the complete output budget. The sampler
   applies penalties, then temperature, then top-k/top-p/min-p filters.
+
+The shared complete-video runtime now enables thinking at both server startup
+and request level. This experiment keeps the numerical sampling values above,
+video processing, prompts, schemas, and token budgets unchanged; it does not
+switch to Qwen's recommended thinking sampling profile. Reasoning is saved in
+the raw response's separate `reasoning_content` field; only final `content` is
+validated as the JSON answer. Reasoning and the final answer share `max_tokens`,
+and an unfinished answer remains a rejected result.
 
 Per-request logs and verification receipts check the actual pair/label stream
 and effective generation controls. These checks target the two identified

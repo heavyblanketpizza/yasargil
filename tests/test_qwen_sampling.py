@@ -55,6 +55,16 @@ class QwenSamplingTests(unittest.TestCase):
         # The pinned sampler may report an inactive min-p filter for p=0.
         self.assertTrue(verify_qwen_sampling(SAMPLER_LOG.replace("?min-p", "min-p"), 12288)["verified"])
 
+    def test_thinking_experiment_preserves_all_baseline_sampling_values(self):
+        baseline = verify_qwen_sampling(SAMPLER_LOG, 12288)
+        thinking = verify_qwen_sampling(SAMPLER_LOG, 12288, enable_thinking=True)
+        self.assertEqual(baseline["mode"], "non-thinking")
+        self.assertEqual(thinking["mode"], "thinking")
+        self.assertEqual(thinking["parameter_profile"], baseline["profile"])
+        self.assertNotEqual(thinking["profile"], baseline["profile"])
+        for key in ("requested_parameters", "observed_parameters", "observed_sampler_chain"):
+            self.assertEqual(thinking[key], baseline[key])
+
     def test_wrong_values_or_missing_fields_cannot_pass_on_the_request_alone(self):
         wrong_values = {
             "repeat_last_n = 12288": "repeat_last_n = 64",

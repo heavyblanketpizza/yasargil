@@ -1,50 +1,54 @@
-# How Qwen3.8-27B understands video
+# How Qwen3.8-27B understands video (ELI5)
 
-Ollama, why is your video support for Qwen3.8 still a TODO comment? [`// TODO: support videos`](https://github.com/ollama/ollama/blob/5a0ff3116d7d1aff28cd7a390783d809f69f0b6c/model/renderers/qwen35.go#L86).
+Ollama, why is your video support for Qwen3.8 still a TODO comment? [`// TODO: support videos`](https://github.com/ollama/ollama/blob/5a0ff3116d7d1aff28cd7a390783d809f69f0b6c/model/renderers/qwen35.go#L86). (Qwen3.8 reuses Qwen3.5's architecture, hence the file name.)
 
-As of 23 September 2026, its [media handling](https://github.com/ollama/ollama/blob/5a0ff3116d7d1aff28cd7a390783d809f69f0b6c/llm/media.go#L17-L24) recognizes images and audio, but still has no supported native video input. The [proposed video implementation](https://github.com/ollama/ollama/pull/12962) remains open and unmerged. The [advice in the GitHub issue](https://github.com/ollama/ollama/issues/10971#issuecomment-3009469523) was to extract the frames and feed them through the image processor. Okay, but what then is the point of using a video-native model for annotations?
+As of 23 September 2026, its [media handling](https://github.com/ollama/ollama/blob/5a0ff3116d7d1aff28cd7a390783d809f69f0b6c/llm/media.go#L17-L24) knows images and audio, not video. The [video PR](https://github.com/ollama/ollama/pull/12962) is still open and unmerged, and the [advice in the issue](https://github.com/ollama/ollama/issues/10971#issuecomment-3009469523) was to extract the frames and feed them as images. Then what is the point of a video-native model?
 
-Fine. Ollama is for noobs and I always liked llama.cpp better anyway. Then I start looking at the timestamps in those answers after switching to llama.cpp and the timestamps are stretching beyond the duration of video inputs. 
+Fine, Ollama is for noobs and I always liked llama.cpp anyway. Then the timestamps in its responses answers ran past the end of test clips with llama.cpp's default vision handling. To debug that I had to learn what 'video-native' means so what does that mean? ELI5:
 
-So what does it mean when a model is video-native? ELI5:
+## 1. The model never sees a video file
 
-[Qwen3.8-27B](https://huggingface.co/Qwen/Qwen3.8-27B) has a vision encoder working with its language model. It can use pictures, their order, and their timing to answer a question. The software running it still has to open the video file and prep that input. “Video native” does not make that step go away as I hoped. Apparently I needed to learn this personally.
+'Video-native' means the model was trained to read *frames in order, with time labels*. Opening the `.mp4` is still your job in 2026.
 
-Let's give the model a short clip where a ball rolls across the floor. We ask: **“Which way did the ball move?”**
+Test clip: a ball rolls across the floor. Question: **"Which way did the ball move?"**
 
-The software opens the video and decodes its pictures, called **frames**. It then selects frames to send to Qwen. For this example, say we take one picture per second. A lot can happen between those pictures. Qwen only gets the ones we send.
+## 2. How the pictures get packed
 
-For this model, the selected frames are processed in pairs. Each pair gets a time label **before** it:
+**Step 1: pairs, each with a time label.** [Qwen3.8-27B](https://huggingface.co/Qwen/Qwen3.8-27B) reads frames two at a time. Before each pair goes a text label with the *average* of the two times. With one frame per second:
+
+![A ball moves right across four frames, paired under midpoint time labels of 0.5 and 2.5 seconds. Below, two frames are split into patches and passed through the vision encoder and projector to produce visual tokens.](assets/qwen-video-guide-patches.png)
 
 ```text
-<0.5 seconds> → [picture at 0 s][picture at 1 s]
-<2.5 seconds> → [picture at 2 s][picture at 3 s]
+<0.5 seconds> [frames 0 s and 1 s, as one block]
+<2.5 seconds> [frames 2 s and 3 s, as one block]
 ```
 
-The `0.5` is the midpoint of the first two times: `(0 + 1) / 2`. Both pictures go into the model. We averaged their times, not the pictures. These are neighboring frames in our selected sequence; they might have been much farther apart in the original file. The [reference processor calculates the labels from their source-frame positions](https://github.com/huggingface/transformers/blob/v5.8.0/src/transformers/models/qwen3_vl/processing_qwen3_vl.py#L235-L246).
+`0.5` is `(0 + 1) / 2`. The times get averaged; the pictures do not. Both go in; the model learned how to combine them. The [reference processor](https://github.com/huggingface/transformers/blob/v5.8.0/src/transformers/models/qwen3_vl/processing_qwen3_vl.py#L257-L268) computes each label from where the frame sat in the original file, so neighbours in your selection can be far apart in the video.
 
-Now we have to turn the pictures into something the language model can use.
+**Step 2: patches.** Each picture is cut into little squares called **patches**, 16 × 16 pixels each (`patch_size` in the [model config](https://huggingface.co/Qwen/Qwen3.8-27B/blob/main/config.json)).
 
-Each picture is divided into little squares called **patches**. Qwen3.8-27B uses 16 × 16 pixel patches, processes two selected frames together, and combines nearby patch features. Those details are in [the model's configuration](https://huggingface.co/Qwen/Qwen3.8-27B/blob/main/config.json).
+**Step 3: numbers.** The **vision encoder** reads both frames of a pair together and emits are patch embeddings. The **projector** merges every 2 × 2 block of those lists into one list of the size the language model uses (`temporal_patch_size` and `spatial_merge_size` in the config). Each one is a **visual token** and not tiny caption saying "ball".
 
-The **vision encoder** processes those patches. The **projector** converts its output into the numerical format the language model uses. We call the resulting pieces **visual tokens**. Think lists of numbers carrying information from the pictures.
+The input is now one line: label, visual tokens, label, visual tokens, question. Remember the time label is plain text sitting between image frames and not designated to a specific frame. **The time label marks the midpoint of the frame pair.**
 
-![A ball moves right across four pictures. The pictures are paired, given time labels, and split into patches. The vision encoder and projector turn them into visual tokens.](assets/qwen-video-guide-patches.png)
+## 3. How it answers
 
-The grid is enlarged and the numbers are made up for the drawing. There isn't a tiny caption saying “ball” inside each square. During training, the model learned patterns in visual information and how they relate to language.
+The ball's visual tokens sit further right in the later block, and the labels say which block is later.
 
-So now Qwen has information from the pictures, their time and order, and our question. The ball is on the left in the earlier pictures and farther right in the later ones. There is evidence it moved right.
+![Picture clues, time and order, and the question feed into Qwen. The answer is built a piece at a time: The, ball, moved, right.](assets/qwen-video-guide-reasoning.png)
 
-![Picture clues, time and order, and the question feed into Qwen. It builds an answer in text tokens: The, ball, moved, right.](assets/qwen-video-guide-reasoning.png)
+Add the question, and that is enough to write "The ball moved right", one token at a time.
 
-Okay. Back to the timestamp code I hadn't planned on reading.
+## 4. The bug in llama.cpp's packing
 
-The [video support added to llama.cpp](https://github.com/ggml-org/llama.cpp/pull/24269) used a general prompt format for different models. In the upstream code I checked on 23 September 2026, the [video helper puts periodic timestamp text after frames](https://github.com/ggml-org/llama.cpp/blob/4ceb1719101f32637b841206c172f3f058ffc182/tools/mtmd/mtmd-helper.cpp#L802-L845). The [pairing code only joins image parts that are directly next to each other](https://github.com/ggml-org/llama.cpp/blob/4ceb1719101f32637b841206c172f3f058ffc182/tools/mtmd/mtmd.cpp#L1100-L1116).
+llama.cpp [added video input](https://github.com/ggml-org/llama.cpp/pull/24269) with a prompt format meant to fit any model. Its [video helper](https://github.com/ggml-org/llama.cpp/blob/4ceb1719101f32637b841206c172f3f058ffc182/tools/mtmd/mtmd-helper.cpp#L802-L845) writes a timestamp as plain text *after* a frame, every 5 seconds by default, starting at 0. Its [pairing rule](https://github.com/ggml-org/llama.cpp/blob/4ceb1719101f32637b841206c172f3f058ffc182/tools/mtmd/mtmd.cpp#L1100-L1116) joins two pictures only when they touch in the line. Text between them breaks the pair.
 
-**The mismatch was in llama.cpp's video input preparation.** It put the first time label between frames 0 and 1. The pairing code cannot join two pictures across a piece of text, so frame 0 was processed by itself. The next pairs became **1 + 2**, then **3 + 4**, until another timestamp interrupted the sequence.
+Same pictures, different pairs and labels:
 
-Qwen's reference processor pairs **0 + 1**, then **2 + 3**, and puts a midpoint time label before each pair. In our one-frame-per-second example, that means **0.5 seconds → frames 0 + 1**, then **2.5 seconds → frames 2 + 3**. Same pictures, different pairs and time labels:
+![Qwen's reference input puts a 0.5-second label before frames 0 and 1, then a 2.5-second label before frames 2 and 3. llama.cpp puts frame 0 before a zero-second label, leaving it alone and pairing frames 1 and 2, then 3 and 4. Only the opening frames are shown.](assets/qwen-video-guide-pairing.png)
 
-![Qwen's reference input puts time 0.5 seconds before frames 0 and 1, then time 2.5 seconds before frames 2 and 3. llama.cpp puts frame 0 first, then time 0 seconds, separating it from frame 1. The next pairs become frames 1 and 2, then frames 3 and 4.](assets/qwen-video-guide-pairing.png)
+So the line starts `Video:`, frame 0, `[0m0.00s]`, frame 1, frame 2, ... Frame 0 is alone, the pairs become **1 + 2** and **3 + 4**, frame 5 is orphaned by the next timestamp, and so on. Every pair shifts by one; every label is misplaced and in the wrong format. Qwen expects **0 + 1** and **2 + 3**, each with its midpoint label in front.
 
-I patched llama.cpp to keep the intended pairs together and put each pair's midpoint time before it. That fixes the input layout. I rerun the full keyframe selection review thing and the model still fucks up timeframes so... WTF. TBC.
+I patched llama.cpp to keep Qwen's pairs together and put each pair's midpoint label before it. That fixes the layout.
+
+I reran the full keyframe selection review and the model still gets timestamps wrong, so... WTF. TBC.

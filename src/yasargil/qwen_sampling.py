@@ -1,4 +1,4 @@
-"""Explicit Qwen3.8 non-thinking settings for the local video runtime.
+"""Explicit Qwen3.8 sampling baseline for the local video runtime.
 
 Matching these numbers does not establish sampler equivalence across backends.
 In particular, llama.cpp's penalty history and sampler order are separate from
@@ -33,25 +33,33 @@ def qwen_non_thinking_parameters() -> dict[str, float | int]:
     }
 
 
-def qwen_sampling_receipt() -> dict:
+def qwen_sampling_receipt(*, enable_thinking: bool = False) -> dict:
     """Describe requested values without claiming observed runtime behavior."""
-    return {
+    receipt = {
         "profile": QWEN_SAMPLING_PROFILE,
         "source": QWEN_SAMPLING_SOURCE,
-        "mode": "non-thinking",
+        "mode": "thinking" if enable_thinking else "non-thinking",
         "requested_parameters": qwen_non_thinking_parameters(),
         "local_choices": ["frequency_penalty", "seed"],
         "backend_equivalence_verified": False,
         "limitation": "Matching parameter values does not verify penalty-history or sampler-order equivalence with other backends.",
     }
+    if enable_thinking:
+        receipt.update({
+            "profile": "qwen3.8-27b-thinking-with-baseline-sampling-v1",
+            "parameter_profile": QWEN_SAMPLING_PROFILE,
+            "mode_note": "Thinking requested with unchanged non-thinking sampling values; this is not Qwen's recommended thinking sampling profile. Reasoning shares the existing output-token budget.",
+        })
+    return receipt
 
 
-def verify_qwen_sampling(segment: str, max_tokens: int) -> dict:
+def verify_qwen_sampling(segment: str, max_tokens: int, *, enable_thinking: bool = False) -> dict:
     """Verify one actual sampler snapshot in a request's saved server log.
 
     The pinned runtime prints numeric settings to three decimal places. This
     checks those observed values and its generated-token-only history marker;
     it is not a claim of numerical equivalence with another inference backend.
+    ``enable_thinking`` records the requested mode, not observed reasoning.
     """
     if type(max_tokens) is not int or not 0 < max_tokens <= 2147483647:
         raise ValueError("max_tokens must be a positive 32-bit integer.")
@@ -101,7 +109,7 @@ def verify_qwen_sampling(segment: str, max_tokens: int) -> dict:
         raise ValueError("Effective sampler history must contain generated tokens only.")
     observed["sampler_history_scope"] = "generated"
 
-    receipt = qwen_sampling_receipt()
+    receipt = qwen_sampling_receipt(enable_thinking=enable_thinking)
     receipt.update({
         "requested_parameters": requested,
         "observed_parameters": observed,

@@ -315,7 +315,7 @@ class LocalVideoRuntime:
             "--video-ffmpeg-dir", str(Path(ffmpeg).parent),
             "--image-min-tokens", "64", "--image-max-tokens", str(self.config.image_max_tokens),
             "-c", str(self.config.context_size), "-ngl", "all", "-fa", "on", "--fit", "off",
-            "--reasoning", "off", "--no-context-shift", "--cache-prompt", "--cache-ram", "0",
+            "--reasoning", "on", "--no-context-shift", "--cache-prompt", "--cache-ram", "0",
             "--offline", "--no-webui", "--timeout", str(math.ceil(self.config.request_timeout)),
             "--log-colors", "off", "--log-verbosity", "5", "--log-timestamps", "--perf",
         ]
@@ -325,7 +325,7 @@ class LocalVideoRuntime:
             "started_at": datetime.now(timezone.utc).isoformat(), "command": self.command,
             "binary_version": version, "setup_manifest": setup,
             "qwen_runtime_build": build_receipt, "video_protocol": VIDEO_PROTOCOL,
-            "sampling_profile": qwen_sampling_receipt(),
+            "sampling_profile": qwen_sampling_receipt(enable_thinking=True),
             "model": {"path": str(model), "resolved_path": str(model.resolve()), "bytes": model.stat().st_size},
             "projector": {"path": str(projector), "resolved_path": str(projector.resolve()), "bytes": projector.stat().st_size},
             "model_hash_note": "Digests are recorded from the existing setup manifest; not rehashed by this runtime.",
@@ -451,11 +451,12 @@ class LocalVideoRuntime:
             raise VideoRuntimeError("Refusing to overwrite existing round evidence.")
         request = {
             "model": "qwen-video", "messages": deepcopy(messages), "max_tokens": max_tokens,
+            # Isolate thinking mode: retain the previous numerical sampling recipe.
             **qwen_non_thinking_parameters(), "stream": False,
             "samplers": ["penalties", "temperature", "top_k", "top_p", "min_p"],
             "samplers_generated_only": True, "repeat_last_n": max_tokens,
             "cache_prompt": True, "id_slot": 0,
-            "chat_template_kwargs": {"enable_thinking": False},
+            "chat_template_kwargs": {"enable_thinking": True},
             "response_format": {"type": "json_schema", "json_schema": {
                 "name": "frame_selection", "strict": True, "schema": schema}},
         }
@@ -473,7 +474,7 @@ class LocalVideoRuntime:
             "message_count": len(messages), "prior_history_preserved": self._previous_messages is not None,
             "request_sha256": hashlib.sha256(payload).hexdigest(), "log_start_byte": offset,
             "full_source_video_verified": False, "accepted": False,
-            "sampling_profile": {**qwen_sampling_receipt(),
+            "sampling_profile": {**qwen_sampling_receipt(enable_thinking=True),
                                  "samplers": request["samplers"],
                                  "samplers_generated_only": True, "repeat_last_n": max_tokens},
         }
@@ -532,7 +533,7 @@ class LocalVideoRuntime:
             except (ValueError, TypeError) as error:
                 raise VideoRuntimeError(f"Qwen video presentation verification failed: {error}") from error
             try:
-                verification["sampling_profile"] = verify_qwen_sampling(segment, max_tokens)
+                verification["sampling_profile"] = verify_qwen_sampling(segment, max_tokens, enable_thinking=True)
             except ValueError as error:
                 raise VideoRuntimeError(f"Qwen generation settings verification failed: {error}") from error
             if any(truncations) or re.search(r"\bcontext shift:|\btruncating (?:the )?prompt", segment, re.IGNORECASE):

@@ -96,7 +96,7 @@ class NativeVideoTests(unittest.TestCase):
         self.assertEqual(self.messages, original)
         self.assertEqual(payload["response_format"]["json_schema"]["schema"], SCHEMA)
         self.assertTrue(payload["cache_prompt"])
-        self.assertFalse(payload["chat_template_kwargs"]["enable_thinking"])
+        self.assertTrue(payload["chat_template_kwargs"]["enable_thinking"])
         self.assertEqual(payload["temperature"], 0.7)
         self.assertEqual(payload["presence_penalty"], 1.5)
         self.assertTrue(payload["samplers_generated_only"])
@@ -104,11 +104,30 @@ class NativeVideoTests(unittest.TestCase):
         self.assertEqual(payload["samplers"], ["penalties", "temperature", "top_k", "top_p", "min_p"])
         self.assertTrue(result["verification"]["qwen_video_protocol"]["tokenizer_stream_verified"])
         self.assertTrue(result["verification"]["sampling_profile"]["verified"])
+        self.assertEqual(result["verification"]["sampling_profile"]["mode"], "thinking")
         self.assertTrue(result["verification"]["full_source_video_verified"])
         self.assertEqual(result["verification"]["decoded_frame_ids"], [0, 1, 2])
         self.assertEqual(json.loads((self.root / "round0/result.json").read_text()), result)
         self.assertEqual(result["response"]["choices"][0]["message"]["content"], self.result["choices"][0]["message"]["content"])
         self.assertNotIn("startup log", (self.root / "round0/server-segment.log").read_text())
+
+    def test_separate_reasoning_is_preserved_without_becoming_the_json_answer(self):
+        self.result["choices"][0]["message"]["reasoning_content"] = "Inspect the supplied still before choosing."
+        self.response()
+        result = self.call()
+        self.assertEqual(result["output"], {"keep": ["F000001"]})
+        saved = json.loads((self.root / "round0/response.json").read_text())
+        self.assertEqual(saved, self.result)
+        self.assertEqual(result["response"], saved)
+
+    def test_reasoning_exhausting_output_budget_is_not_an_accepted_answer(self):
+        self.result["choices"][0].update(finish_reason="length", message={
+            "role": "assistant", "reasoning_content": "Still inspecting the supplied frames.", "content": ""})
+        self.response()
+        with self.assertRaisesRegex(VideoRuntimeError, "Unfinished"):
+            self.call()
+        self.assertEqual(json.loads((self.root / "round0/response.json").read_text()), self.result)
+        self.assertFalse((self.root / "round0/result.json").exists())
 
     def test_requested_settings_without_effective_sampler_evidence_are_rejected(self):
         self.response(sampler_log=False)
@@ -281,7 +300,9 @@ class NativeVideoTests(unittest.TestCase):
         self.assertEqual(runtime.command[runtime.command.index("--video-fps") + 1], "0")
         self.assertIn("--no-context-shift", runtime.command)
         self.assertEqual(runtime.command[runtime.command.index("--fit") + 1], "off")
+        self.assertEqual(runtime.command[runtime.command.index("--reasoning") + 1], "on")
         self.assertEqual(runtime.command[runtime.command.index("--host") + 1], "127.0.0.1")
+        self.assertEqual(json.loads((self.root / "startup/runtime.json").read_text())["sampling_profile"]["mode"], "thinking")
 
     def test_installed_transport_is_used_by_preflight_and_actual_native_server(self):
         from yasargil.ffmpeg_transport import RECEIPT_DIRECTORY_ENV
