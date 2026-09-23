@@ -4,7 +4,7 @@ Ollama, why is your video support for Qwen3.8 still a TODO comment? [`// TODO: s
 
 As of 23 September 2026, its [media handling](https://github.com/ollama/ollama/blob/5a0ff3116d7d1aff28cd7a390783d809f69f0b6c/llm/media.go#L17-L24) knows images and audio, not video. The [video PR](https://github.com/ollama/ollama/pull/12962) is still open and unmerged, and the [advice in the issue](https://github.com/ollama/ollama/issues/10971#issuecomment-3009469523) was to extract the frames and feed them as images. Then what is the point of a video-native model?
 
-Fine, Ollama is for noobs and I always liked llama.cpp anyway. Then the timestamps in its responses answers ran past the end of test clips with llama.cpp's default vision handling. To debug that I had to learn what 'video-native' means so what does that mean? ELI5:
+Fine, Ollama is for noobs and I always liked llama.cpp anyway. Then the timestamps in its responses answers ran past the end of test clips with llama.cpp's default vision handling. To debug that I had to learn what 'video-native' means so what does that mean? **ELI5**:
 
 ## 1. The model never sees a video file
 
@@ -51,4 +51,4 @@ So the line starts `Video:`, frame 0, `[0m0.00s]`, frame 1, frame 2, ... Frame 0
 
 I patched llama.cpp to keep Qwen's pairs together and put each pair's midpoint label before it. That fixes the layout.
 
-I reran the full keyframe selection review and the model still gets timestamps wrong, so... WTF. TBC.
+**I reran the full keyframe selection review and the model still gets timestamps wrong, so... WTF. TBC.**
