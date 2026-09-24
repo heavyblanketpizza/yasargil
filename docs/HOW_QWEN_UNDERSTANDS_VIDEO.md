@@ -1,4 +1,4 @@
-# How Qwen3.8-27B understands video (ELI5)
+# How Qwen3.8-27B understands video inputs (ELI5)
 
 Ollama, why is your video support for Qwen3.8 still a TODO comment? [`// TODO: support videos`](https://github.com/ollama/ollama/blob/5a0ff3116d7d1aff28cd7a390783d809f69f0b6c/model/renderers/qwen35.go#L86). (Qwen3.8 reuses Qwen3.5's architecture, hence the file name.)
 
@@ -8,13 +8,13 @@ Fine, Ollama is for noobs and I always liked llama.cpp better anyway. Then the t
 
 ## 1. The model never sees a video file
 
-'Video-native' means the model was trained to read *frames in order, with time labels*. Opening the `.mp4` is still your job in 2026.
+'Video-native' means the model was trained to read *frames in order, with time labels*. Apparently, opening the `.mp4` is still your job in 2026.
 
 Test clip: a ball rolls across the floor. Question: **"Which way did the ball move?"**
 
 ## 2. How the pictures get packed
 
-**Step 1: pairs, each with a time label.** [Qwen3.8-27B](https://huggingface.co/Qwen/Qwen3.8-27B) reads frames two at a time. Before each pair goes a text label with the *average* of the two times. With one frame per second:
+**Step 1: pairs, each assigned with a time label.** [Qwen3.8-27B](https://huggingface.co/Qwen/Qwen3.8-27B) reads two frames at a time. Before each pair goes a text label with the *average* of the two times. With one frame per second:
 
 ![A ball moves right across four frames, paired under midpoint time labels of 0.5 and 2.5 seconds. Below, two frames are split into patches and passed through the vision encoder and projector to produce visual tokens.](assets/qwen-video-guide-patches.png)
 
@@ -23,9 +23,9 @@ Test clip: a ball rolls across the floor. Question: **"Which way did the ball mo
 <2.5 seconds> [frames 2 s and 3 s, as one block]
 ```
 
-`0.5` is `(0 + 1) / 2`. The times get averaged; the pictures do not. Both go in; the model learned how to combine them. The [reference processor](https://github.com/huggingface/transformers/blob/v5.8.0/src/transformers/models/qwen3_vl/processing_qwen3_vl.py#L257-L268) computes each label from where the frame sat in the original file, so neighbours in your selection can be far apart in the video.
+`0.5` is `(0 + 1) / 2`. The times get averaged and two frames go in as a pair. Both frames go in at the same time and the model learned how to combine them. The [reference processor](https://github.com/huggingface/transformers/blob/v5.8.0/src/transformers/models/qwen3_vl/processing_qwen3_vl.py#L257-L268) computes each label from where the frame sat in the original file, so neighbours in your selection can be far apart in the video.
 
-**Step 2: patches.** Each picture is cut into little squares called **patches**, 16 × 16 pixels each (`patch_size` in the [model config](https://huggingface.co/Qwen/Qwen3.8-27B/blob/main/config.json)).
+**Step 2: patches.** Each picture is cut into 16 × 16 pixel patches (`patch_size` in the [model config](https://huggingface.co/Qwen/Qwen3.8-27B/blob/main/config.json)).
 
 **Step 3: numbers.** The **vision encoder** reads both frames of a pair together and emits are patch embeddings. The **projector** merges every 2 × 2 block of those lists into one list of the size the language model uses (`temporal_patch_size` and `spatial_merge_size` in the config). Each one is a **visual token** and not tiny caption saying "ball".
 
