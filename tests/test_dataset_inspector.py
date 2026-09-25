@@ -32,8 +32,6 @@ class InspectorTests(unittest.TestCase):
         self.root = Path(temporary.name).resolve()
         self.outputs = self.root / "outputs"
         self.selection = self.outputs / "selection" / "S1A1"
-        self.annotation = self.outputs / "annotations" / "S1A1"
-        self.review = self.outputs / "reviews" / "S1A1"
         self.dataset = self.root / "dataset"
         source_path = self.dataset / "frames" / "S1A1"
         source_path.mkdir(parents=True)
@@ -63,37 +61,7 @@ class InspectorTests(unittest.TestCase):
                 {**self.frames[2], "model_decision": "drop", "effective_decision": "keep", "coverage_override": True},
                 {**self.frames[3], "model_decision": "unreviewed", "effective_decision": "unreviewed"}]}
         write(self.selection / "selection.json", self.selection_data)
-        self.annotation_data = {"annotations": [{**self.frames[0], "visible_observation": "Qwen draft",
-            "visibility": "partial", "contextual_claims": [], "uncertainties": ["Instrument uncertain"]}],
-            "selection_run": str(self.selection), "verification": {"video_sha256": self.source["video_sha256"]}}
-        self.annotation_plan = {"schema_version": "full-video-frame-annotation-v1", "created_at": "2026-01-02",
-            "selection_run": str(self.selection), "input_sha256": {"selection.json": digest(self.selection / "selection.json"),
-                "source/source.json": digest(self.selection / "source/source.json")}}
-        write(self.annotation / "run.json", self.annotation_plan)
-        write(self.annotation / "source/source.json", self.source)
-        write(self.annotation / "annotations.json", self.annotation_data)
-        write(self.annotation / "summary.json", {"status": "completed"})
-        self.packet = {"target_frame_id": "f0", "qwen_annotation": self.annotation_data["annotations"][0],
-            "frames": [{**self.frames[0], "evidence_roles": ["target"]},
-                       {**self.frames[1], "evidence_roles": ["after"]}],
-            "dataset_context": {"excluded_context": ["case_outcomes", "surgeon_experience"]}}
-        self.judgment = {"target_frame_id": "f0", "status": "needs_more_evidence", "assessment": "uncertain",
-            "revised_annotation": {"visible_observation": "Revised draft", "contextual_claims": [],
-                                   "visibility": "partial", "uncertainties": ["Target detail needed"]},
-            "corrections": [], "evidence_requests": [{"question": "Need closer view", "target": "target_detail"}]}
-        self.review_row = {"target_frame_id": "f0", "qwen_annotation": self.annotation_data["annotations"][0],
-            "medgemma_review": self.judgment, "evidence": self.packet, "call_directory": "calls/frame-0000/attempt-0000",
-            "deferred_evidence_requests": self.judgment["evidence_requests"], "automated_followup": False}
-        self.review_plan = {"schema_version": "medgemma-frame-review-v1", "created_at": "2026-01-03",
-            "annotation_run": str(self.annotation), "evidence_files": ["evidence/frame-0000.json"],
-            "input_sha256": {"qwen/annotations.json": digest(self.annotation / "annotations.json")}}
-        write(self.review / "run.json", self.review_plan)
-        write(self.review / "qwen/run.json", self.annotation_plan)
-        write(self.review / "qwen/source/source.json", self.source)
-        write(self.review / "evidence/frame-0000.json", self.packet)
-        write(self.review / "reviews.json", {"reviews": [self.review_row]})
-        write(self.review / "summary.json", {"status": "completed"})
-        write(self.review / "calls/frame-0000/attempt-0000/response.json", {"full": "raw model response"})
+        self.medgemma, self.packet, self.row = self.independent_run()
         for filename in ("sospine_tool_tips.csv", "sospine_bbox.csv"):
             with (self.dataset / filename).open("w", newline="") as stream:
                 writer = csv.DictWriter(stream, ["trial_frame", "x1", "y1", "x2", "y2", "label"])
@@ -115,7 +83,7 @@ class InspectorTests(unittest.TestCase):
     def independent_run(self):
         from yasargil.medgemma_annotation_contract import build_annotation
         from yasargil.medgemma_annotation_evidence import canonical_frame
-        root = self.outputs / "independent" / "S1A1"
+        root = self.outputs / "medgemma" / "S1A1"
         target = canonical_frame(self.frames[0])
         context = canonical_frame(self.frames[1])
         crop = root / "assets" / "detail.png"
@@ -139,72 +107,53 @@ class InspectorTests(unittest.TestCase):
             "call_directory": "calls/frame-0000/attempt-0000"}
         write(root / "source.json", self.source)
         write(root / "selected-frames.json", [self.frames[0], self.frames[2]])
+        write(root / "selection/selection.json", self.selection_data)
         write(root / "evidence/frame-0000.json", packet)
         write(root / "run.json", {"schema_version": "medgemma-frame-annotation-v1", "created_at": "2026-02-01",
             "selection_run": str(self.selection), "source_file": "source.json", "selected_file": "selected-frames.json",
             "frame_ids": ["f0", "f2"], "evidence_files": ["evidence/frame-0000.json"],
             "input_sha256": {name: digest(root / name) for name in
-                             ("source.json", "selected-frames.json", "evidence/frame-0000.json")}})
+                             ("source.json", "selected-frames.json", "selection/selection.json", "evidence/frame-0000.json")}})
         write(root / "annotations.json", {"schema_version": "medgemma-frame-annotation-v1", "annotations": [row],
             "human_review_required": True, "training_eligible": False})
         write(root / "summary.json", {"status": "partial", "selected_frame_count": 2, "annotated_frame_count": 1})
         write(root / row["call_directory"] / "annotation.json", annotation)
+        write(root / row["call_directory"] / "response.json", {"full": "raw model response"})
         return root, packet, row
 
-    def test_independent_medgemma_annotations_need_no_qwen_artifacts(self):
-        root, packet, row = self.independent_run()
-        shutil.rmtree(self.annotation)
-        shutil.rmtree(self.review)
+    def test_independent_annotations_display_with_evidence_views_and_complete_response(self):
         store, record_id = self.store()
         record, detail = store.record(record_id), store.frame(record_id, "f0")
         self.assertEqual(record["medgemma_annotation_count"], 1)
-        self.assertEqual(record["medgemma_review_count"], 0)
-        self.assertEqual(record["qwen_annotation_count"], 0)
-        self.assertIsNone(detail["qwen"])
-        self.assertEqual(detail["medgemma"], row["annotation"])
-        self.assertEqual(record["runs"]["medgemma"]["path"], str(root))
-        self.assertEqual([view["view_id"] for view in detail["evidence"]], [view["view_id"] for view in packet["views"]])
+        self.assertEqual(detail["medgemma"], self.row["annotation"])
+        self.assertEqual(detail["raw"]["medgemma"], self.row)
+        self.assertEqual(record["runs"]["medgemma"]["path"], str(self.medgemma))
+        self.assertEqual([view["view_id"] for view in detail["evidence"]], [view["view_id"] for view in self.packet["views"]])
+        self.assertEqual([view["roles"] for view in detail["evidence"]], [["target"], ["target_detail"], ["context_after"]])
         self.assertEqual(detail["evidence"][1]["bounds"], [0, 0, 8, 8])
         self.assertIsNotNone(store.media(detail["evidence"][1]["image_url"].rsplit("/", 1)[-1]))
-        self.assertEqual(detail["artifacts"][0]["label"], "MedGemma annotation")
+        self.assertEqual([artifact["label"] for artifact in detail["artifacts"]],
+                         ["Complete MedGemma response", "MedGemma annotation"])
+        response_path = store.media(detail["artifacts"][0]["url"].rsplit("/", 1)[-1])
+        self.assertEqual(json.loads(response_path.read_text()), {"full": "raw model response"})
         self.assertIsNone(store.frame(record_id, "f2")["medgemma"])
+        self.assertIsNone(store.frame(record_id, "f4")["medgemma"])
+        detail["raw"]["medgemma"]["target_frame_id"] = "edited"
+        self.assertEqual(store.frame(record_id, "f0")["raw"]["medgemma"]["target_frame_id"], "f0")
         self.assertFalse(store.records()["warnings"])
-        curation = store.curate(record_id, "f0", {"review_identity": record["review_identity"],
-            "action": "edit", "annotations": {"medgemma": "Human annotation"}})
-        self.assertEqual(curation["provenance"]["original_annotations"]["medgemma"], row["annotation"])
-
-    def test_independent_annotations_take_precedence_and_keep_historical_run_links(self):
-        root, _, row = self.independent_run()
-        store, record_id = self.store()
-        record = store.record(record_id)
-        self.assertEqual(record["runs"]["medgemma"]["path"], str(root))
-        self.assertEqual(record["runs"]["historical_medgemma_reviews"][0]["path"], str(self.review))
-        self.assertEqual(store.frame(record_id, "f0")["medgemma"], row["annotation"])
 
     def test_independent_annotation_rejects_changed_pinned_evidence_and_invalid_claims(self):
-        root, _, row = self.independent_run()
+        row = copy.deepcopy(self.row)
         row["annotation"]["claims"][0]["evidence_view_ids"] = ["invented"]
-        write(root / "annotations.json", {"schema_version": "medgemma-frame-annotation-v1", "annotations": [row]})
+        write(self.medgemma / "annotations.json", {"schema_version": "medgemma-frame-annotation-v1", "annotations": [row]})
         store, record_id = self.store()
         self.assertEqual(store.record(record_id)["medgemma_annotation_count"], 0)
         self.assertIsNone(store.frame(record_id, "f0")["medgemma"])
         self.assertTrue(store.frame(record_id, "f0")["evidence"])
-        write(root / "evidence/frame-0000.json", {"target_frame_id": "f0"})
+        write(self.medgemma / "evidence/frame-0000.json", {"target_frame_id": "f0"})
         store, record_id = self.store()
-        self.assertNotEqual(store.record(record_id)["runs"]["medgemma"]["path"], str(root))
+        self.assertIsNone(store.record(record_id)["runs"]["medgemma"])
         self.assertTrue(any("independent MedGemma" in warning for warning in store.records()["warnings"]))
-
-    def test_v2_frame_bound_annotations_remain_visible_in_the_inspector(self):
-        self.annotation_plan["schema_version"] = "full-video-frame-annotation-v2"
-        write(self.annotation / "run.json", self.annotation_plan)
-        self.annotation_data["schema_version"] = "contextual-frame-annotations-v2"
-        self.annotation_data["annotations"][0]["contextual_claims"] = [{"claim": "Source evidence.",
-            "evidence_intervals": [{"start_frame_id": "f4", "end_frame_id": "f4",
-                "start_ms": 4000, "end_ms": 4000, "supporting_frames": [self.frames[-1]]}]}]
-        write(self.annotation / "annotations.json", self.annotation_data)
-        store, record_id = self.store()
-        detail = store.frame(record_id, "f0")
-        self.assertEqual(detail["qwen"], self.annotation_data["annotations"][0])
 
     def test_full_canonical_timeline_and_protected_drop_semantics(self):
         store, record_id = self.store()
@@ -220,24 +169,6 @@ class InspectorTests(unittest.TestCase):
         self.assertNotIn("ffprobe", record["metadata"])
         self.assertNotIn("commands", record["metadata"])
 
-    def test_qwen_revision_evidence_and_complete_response_are_preserved(self):
-        store, record_id = self.store()
-        summary = store.record(record_id)
-        self.assertEqual((summary["qwen_annotation_count"], summary["medgemma_review_count"]), (1, 1))
-        frame = store.frame(record_id, "f0")
-        self.assertEqual(frame["qwen"]["visible_observation"], "Qwen draft")
-        self.assertEqual(frame["medgemma"], self.judgment)
-        self.assertEqual(frame["raw"]["medgemma"], self.review_row)
-        self.assertEqual([row["roles"] for row in frame["evidence"]], [["target"], ["after"]])
-        self.assertFalse(frame["raw"]["medgemma"]["automated_followup"])
-        self.assertEqual(frame["artifacts"][0]["label"], "Complete MedGemma response")
-        response_path = store.media(frame["artifacts"][0]["url"].rsplit("/", 1)[-1])
-        self.assertEqual(json.loads(response_path.read_text()), {"full": "raw model response"})
-        self.assertIsNone(store.frame(record_id, "f4")["qwen"])
-        self.assertIsNone(store.frame(record_id, "f2")["medgemma"])
-        frame["raw"]["medgemma"]["target_frame_id"] = "edited"
-        self.assertEqual(store.frame(record_id, "f0")["raw"]["medgemma"]["target_frame_id"], "f0")
-
     def test_outcomes_are_exact_complete_human_only_and_never_define_timing(self):
         store, record_id = self.store()
         frame = store.frame(record_id, "f0")
@@ -249,7 +180,7 @@ class InspectorTests(unittest.TestCase):
         self.assertFalse(outcomes["used_for_model_inference"])
         self.assertEqual(store.record(record_id)["duration_ms"], 5000)
         self.assertNotIn("99999", json.dumps(frame["raw"]))
-        self.assertNotIn("99999", json.dumps(frame["dataset_context"]))
+        self.assertNotIn("99999", json.dumps(frame["evidence_context"]))
         self.assertEqual(len(frame["original_annotations"]), 2)
         self.assertEqual(frame["original_annotations"][0]["raw_value"]["x1"], "1.2300")
         self.assertEqual(frame["original_annotations"][0]["raw_value"]["label"], "needle driver tip ")
@@ -269,41 +200,33 @@ class InspectorTests(unittest.TestCase):
         self.assertIsNone(store.record(record_id)["outcomes"]["raw"])
 
     def test_other_runs_with_same_video_cannot_supply_annotations(self):
-        self.annotation_plan["selection_run"] = str(self.outputs / "unrelated-selection")
-        write(self.annotation / "run.json", self.annotation_plan)
+        plan = json.loads((self.medgemma / "run.json").read_text())
+        plan["selection_run"] = str(self.outputs / "unrelated-selection")
+        write(self.medgemma / "run.json", plan)
         store, record_id = self.store()
         record = store.record(record_id)
-        self.assertEqual(record["qwen_annotation_count"], 0)
-        self.assertEqual(record["medgemma_review_count"], 0)
-        self.assertIsNone(record["runs"]["qwen"])
+        self.assertEqual(record["medgemma_annotation_count"], 0)
+        self.assertIsNone(record["runs"]["medgemma"])
 
     def test_changed_video_or_selection_hash_cannot_supply_annotations(self):
         other = copy.deepcopy(self.source)
         other["video_sha256"] = "b" * 64
-        write(self.annotation / "source/source.json", other)
+        write(self.medgemma / "source.json", other)
         store, record_id = self.store()
-        self.assertEqual(store.record(record_id)["qwen_annotation_count"], 0)
+        self.assertEqual(store.record(record_id)["medgemma_annotation_count"], 0)
         self.assertTrue(store.records()["warnings"])
-        write(self.annotation / "source/source.json", self.source)
-        self.annotation_plan["input_sha256"]["selection.json"] = "b" * 64
-        write(self.annotation / "run.json", self.annotation_plan)
+        write(self.medgemma / "source.json", self.source)
         store, record_id = self.store()
-        self.assertEqual(store.record(record_id)["qwen_annotation_count"], 0)
-
-    def test_medgemma_requires_exact_qwen_parent_and_evidence(self):
-        self.review_row["evidence"]["frames"][1]["timestamp_ms"] = 4444
-        write(self.review / "reviews.json", {"reviews": [self.review_row]})
+        self.assertEqual(store.record(record_id)["medgemma_annotation_count"], 1)
+        changed = copy.deepcopy(self.selection_data)
+        changed["frames"][0]["model_reason"] = "Changed after annotation"
+        write(self.selection / "selection.json", changed)
         store, record_id = self.store()
-        self.assertEqual(store.record(record_id)["medgemma_review_count"], 0)
-        self.assertIsNone(store.frame(record_id, "f0")["medgemma"])
-        self.review_plan["annotation_run"] = str(self.outputs / "different-annotation")
-        write(self.review / "run.json", self.review_plan)
-        store, record_id = self.store()
-        self.assertIsNone(store.record(record_id)["runs"]["medgemma"])
+        self.assertEqual(store.record(record_id)["medgemma_annotation_count"], 0)
 
     def test_prepared_and_partial_runs_are_visible_without_invented_outputs(self):
         (self.selection / "selection.json").unlink()
-        (self.annotation / "annotations.json").unlink()
+        (self.medgemma / "annotations.json").unlink()
         store, record_id = self.store()
         record = store.record(record_id)
         self.assertEqual(record["frame_count"], 5)
@@ -315,12 +238,14 @@ class InspectorTests(unittest.TestCase):
         self.assertTrue(store.records()["warnings"])
 
     def test_refresh_discovers_new_results_and_missing_media_is_explicit(self):
-        (self.review / "reviews.json").unlink()
+        path = self.medgemma / "annotations.json"
+        published = path.read_bytes()
+        path.unlink()
         store, record_id = self.store()
         self.assertIsNone(store.frame(record_id, "f0")["medgemma"])
-        self.assertEqual(len(store.frame(record_id, "f0")["evidence"]), 2)
-        write(self.review / "reviews.json", {"reviews": [self.review_row]})
-        self.assertEqual(store.records()["records"][0]["medgemma_review_count"], 1)
+        self.assertEqual(len(store.frame(record_id, "f0")["evidence"]), 3)
+        path.write_bytes(published)
+        self.assertEqual(store.records()["records"][0]["medgemma_annotation_count"], 1)
         Path(self.frames[4]["image_path"]).unlink()
         store.records()
         self.assertIsNone(store.frame(record_id, "f4")["frame"]["image_url"])
@@ -330,12 +255,19 @@ class InspectorTests(unittest.TestCase):
         original = store.record(record_id)["review_identity"]
         store.records()
         self.assertEqual(store.record(record_id)["review_identity"], original)
-        self.annotation_data["annotations"][0]["visible_observation"] = "Updated Qwen draft"
-        write(self.annotation / "annotations.json", self.annotation_data)
+        from yasargil.medgemma_annotation_contract import build_annotation
+        document = json.loads((self.medgemma / "annotations.json").read_text())
+        annotation = document["annotations"][0]["annotation"]
+        raw = {key: annotation[key] for key in ("target_frame_id", "visibility", "unresolved_questions")}
+        raw["claims"] = [{key: value for key, value in claim.items() if key != "evidence_frame_ids"}
+                         for claim in annotation["claims"]]
+        raw["claims"][0]["statement"] = "Updated MedGemma claim."
+        document["annotations"][0]["annotation"] = build_annotation(raw, self.packet)
+        write(self.medgemma / "annotations.json", document)
         store.records()
         updated = store.record(record_id)["review_identity"]
         self.assertNotEqual(original, updated)
-        self.assertEqual(store.frame(record_id, "f0")["qwen"]["visible_observation"], "Updated Qwen draft")
+        self.assertEqual(store.frame(record_id, "f0")["medgemma"]["claims"][0]["statement"], "Updated MedGemma claim.")
         store.records()
         self.assertEqual(store.record(record_id)["review_identity"], updated)
         # Identical canonical source media in another selection run still has
@@ -371,21 +303,20 @@ class InspectorTests(unittest.TestCase):
         self.assertTrue(all(frame["curation"] is None for frame in store.record(record_id)["frames"]))
 
         result = store.curate(record_id, "f0", {"review_identity": identity, "action": "edit",
-                                               "annotations": {"qwen": "Human-corrected draft", "medgemma": ""}})
-        self.assertEqual(result["annotations"], {"qwen": "Human-corrected draft", "medgemma": ""})
+                                               "annotations": {"medgemma": "Human-corrected annotation"}})
+        self.assertEqual(result["annotations"], {"medgemma": "Human-corrected annotation"})
         self.assertFalse(result["deleted"])
         self.assertEqual(result["worksheet_status"], "draft")
         self.assertFalse(result["training_eligible"])
         self.assertEqual(result["provenance"]["source_frame"], self.frames[0])
-        self.assertEqual(result["provenance"]["original_annotations"]["qwen"], self.annotation_data["annotations"][0])
-        self.assertEqual(result["provenance"]["original_annotations"]["medgemma"], self.judgment)
-        result["annotations"]["qwen"] = "Caller cannot modify stored value"
+        self.assertEqual(result["provenance"]["runs"], {"selection": str(self.selection), "medgemma": str(self.medgemma)})
+        self.assertEqual(result["provenance"]["original_annotations"], {"medgemma": self.row["annotation"]})
+        result["annotations"]["medgemma"] = "Caller cannot modify stored value"
         restarted = InspectorStore(self.outputs)
         frame = restarted.frame(record_id, "f0")
-        self.assertEqual(frame["curation"]["annotations"]["qwen"], "Human-corrected draft")
+        self.assertEqual(frame["curation"]["annotations"]["medgemma"], "Human-corrected annotation")
         self.assertEqual(frame["frame"]["curation"], frame["curation"])
-        self.assertEqual(frame["qwen"]["visible_observation"], "Qwen draft")
-        self.assertEqual(frame["medgemma"], self.judgment)
+        self.assertEqual(frame["medgemma"], self.row["annotation"])
 
         deleted = restarted.curate(record_id, "f0", {"review_identity": identity, "action": "delete"})
         self.assertTrue(deleted["deleted"])
@@ -402,7 +333,7 @@ class InspectorTests(unittest.TestCase):
     def test_curation_rejects_stale_lineage_and_does_not_migrate_to_new_revisions(self):
         store, record_id = self.store()
         identity = store.record(record_id)["review_identity"]
-        request = {"review_identity": identity, "action": "edit", "annotations": {"qwen": "Human draft"}}
+        request = {"review_identity": identity, "action": "edit", "annotations": {"medgemma": "Human draft"}}
         saved = store.curate(record_id, "f0", request)
         outcome_path = self.dataset / "sospine_outcomes.csv"
         original_outcomes = outcome_path.read_text()
@@ -415,7 +346,7 @@ class InspectorTests(unittest.TestCase):
         self.assertNotEqual(identity, updated_identity)
         self.assertIsNone(store.frame(record_id, "f0")["curation"])
         newer = store.curate(record_id, "f0", {**request, "review_identity": updated_identity,
-                                               "annotations": {"qwen": "New revision draft"}})
+                                               "annotations": {"medgemma": "New revision draft"}})
         self.assertNotEqual(saved["review_identity"], newer["review_identity"])
         outcome_path.write_text(original_outcomes)
         store.records()
@@ -433,11 +364,12 @@ class InspectorTests(unittest.TestCase):
     def test_curation_validates_actions_sources_and_saved_files_before_writing(self):
         store, record_id = self.store()
         identity = store.record(record_id)["review_identity"]
-        base = {"review_identity": identity, "action": "edit", "annotations": {"qwen": "Human draft"}}
+        base = {"review_identity": identity, "action": "edit", "annotations": {"medgemma": "Human draft"}}
         for invalid in (None, [], {}, {**base, "unexpected": True}, {**base, "review_identity": 1},
                         {**base, "action": []}, {**base, "action": "erase"}, {**base, "annotations": {}},
-                        {**base, "annotations": {"other": "text"}}, {**base, "annotations": {"qwen": 1}},
-                        {**base, "annotations": {"qwen": "a" * 100001}}, {**base, "action": "delete"}):
+                        {**base, "annotations": {"other": "text"}}, {**base, "annotations": {"qwen": "text"}},
+                        {**base, "annotations": {"medgemma": 1}},
+                        {**base, "annotations": {"medgemma": "a" * 100001}}, {**base, "action": "delete"}):
             with self.subTest(invalid=str(invalid)[:100]):
                 with self.assertRaises(CurationError) as rejected:
                     store.curate(record_id, "f0", invalid)
@@ -450,15 +382,9 @@ class InspectorTests(unittest.TestCase):
         with self.assertRaises(CurationError) as rejected:
             store.curate(record_id, "missing", base)
         self.assertEqual(rejected.exception.status, 404)
-        (self.review / "reviews.json").unlink()
-        store.records()
-        identity = store.record(record_id)["review_identity"]
-        with self.assertRaises(CurationError) as rejected:
-            store.curate(record_id, "f0", {**base, "review_identity": identity, "annotations": {"medgemma": "not present"}})
-        self.assertEqual(rejected.exception.status, 409)
         deleted = store.curate(record_id, "f0", {"review_identity": identity, "action": "delete"})
         with self.assertRaisesRegex(CurationError, "Restore"):
-            store.curate(record_id, "f0", {**base, "review_identity": identity})
+            store.curate(record_id, "f0", base)
         self.assertEqual(store.frame(record_id, "f0")["curation"], deleted)
         path = next(store.curation_root.rglob("*.json"))
         path.write_text("invalid saved data")
@@ -469,13 +395,13 @@ class InspectorTests(unittest.TestCase):
     def test_curation_failed_commit_preserves_previous_value_and_removes_temporary_file(self):
         store, record_id = self.store()
         identity = store.record(record_id)["review_identity"]
-        request = {"review_identity": identity, "action": "edit", "annotations": {"qwen": "Saved draft"}}
+        request = {"review_identity": identity, "action": "edit", "annotations": {"medgemma": "Saved draft"}}
         saved = store.curate(record_id, "f0", request)
         path = next(store.curation_root.rglob("*.json"))
         before = path.read_bytes()
         with patch("yasargil.dataset_inspector.os.replace", side_effect=OSError("disk error")):
             with self.assertRaises(OSError):
-                store.curate(record_id, "f0", {**request, "annotations": {"qwen": "Failed draft"}})
+                store.curate(record_id, "f0", {**request, "annotations": {"medgemma": "Failed draft"}})
         self.assertEqual(path.read_bytes(), before)
         self.assertEqual(store.frame(record_id, "f0")["curation"], saved)
         self.assertEqual(list(path.parent.glob(".curation-*")), [])
@@ -483,7 +409,7 @@ class InspectorTests(unittest.TestCase):
     def test_curation_conditional_updates_reject_stale_tabs_without_mutating_history(self):
         store, record_id = self.store()
         identity = store.record(record_id)["review_identity"]
-        request = {"review_identity": identity, "action": "edit", "annotations": {"qwen": "First draft"},
+        request = {"review_identity": identity, "action": "edit", "annotations": {"medgemma": "First draft"},
                    "expected_updated_at": None}
         for invalid in (False, 1, [], {}):
             with self.assertRaises(CurationError) as rejected:
@@ -495,13 +421,13 @@ class InspectorTests(unittest.TestCase):
         for action in ("edit", "delete", "restore"):
             stale = {"review_identity": identity, "action": action, "expected_updated_at": None}
             if action == "edit":
-                stale["annotations"] = {"qwen": "Stale draft"}
+                stale["annotations"] = {"medgemma": "Stale draft"}
             with self.assertRaisesRegex(CurationError, "another window") as rejected:
                 other.curate(record_id, "f0", stale)
             self.assertEqual(rejected.exception.status, 409)
             self.assertEqual(store.frame(record_id, "f0")["curation"], first)
         updated = other.curate(record_id, "f0", {**request, "expected_updated_at": first["updated_at"],
-                                                 "annotations": {"qwen": "Current draft"}})
+                                                 "annotations": {"medgemma": "Current draft"}})
         with self.assertRaises(CurationError):
             store.curate(record_id, "f0", {**request, "expected_updated_at": first["updated_at"]})
         self.assertEqual(store.frame(record_id, "f0")["curation"], updated)
@@ -514,22 +440,23 @@ class InspectorTests(unittest.TestCase):
         self.assertEqual(restored["annotations"], updated["annotations"])
         self.assertEqual(store.record(record_id)["review_identity"], identity)
 
-    def test_concurrent_inspectors_merge_annotation_fields_under_file_lock(self):
+    def test_concurrent_inspectors_serialize_edits_under_file_lock(self):
         store, record_id = self.store()
         other = InspectorStore(self.outputs)
         identity = store.record(record_id)["review_identity"]
         barrier = threading.Barrier(2)
         errors = []
 
-        def update(instance, name):
+        def update(instance, text):
             try:
                 barrier.wait(timeout=3)
                 instance.curate(record_id, "f0", {"review_identity": identity, "action": "edit",
-                                                   "annotations": {name: name + " human draft"}})
+                                                   "annotations": {"medgemma": text}})
             except Exception as exc:
                 errors.append(exc)
 
-        workers = [threading.Thread(target=update, args=pair) for pair in ((store, "qwen"), (other, "medgemma"))]
+        workers = [threading.Thread(target=update, args=pair)
+                   for pair in ((store, "first human draft"), (other, "second human draft"))]
         for worker in workers:
             worker.start()
         for worker in workers:
@@ -537,8 +464,9 @@ class InspectorTests(unittest.TestCase):
             self.assertFalse(worker.is_alive())
         self.assertEqual(errors, [])
         result = store.frame(record_id, "f0")["curation"]
-        self.assertEqual(result["annotations"], {"qwen": "qwen human draft", "medgemma": "medgemma human draft"})
-        self.assertEqual(len(result["history"]), 2)
+        edits = [event["annotations"]["medgemma"] for event in result["history"]]
+        self.assertEqual(sorted(edits), ["first human draft", "second human draft"])
+        self.assertEqual(result["annotations"]["medgemma"], edits[-1])
 
     def test_curation_storage_symlinks_are_never_followed(self):
         store, record_id = self.store()
@@ -558,7 +486,7 @@ class InspectorTests(unittest.TestCase):
         self.addCleanup(server.server_close)
         self.addCleanup(server.shutdown)
         identity = store.record(record_id)["review_identity"]
-        request = {"review_identity": identity, "action": "edit", "annotations": {"qwen": "Human edit"}}
+        request = {"review_identity": identity, "action": "edit", "annotations": {"medgemma": "Human edit"}}
         route = f"/api/records/{record_id}/frames/f0/curation"
 
         def submit(value=request, *, raw=None, headers=None, path=route):
@@ -572,10 +500,10 @@ class InspectorTests(unittest.TestCase):
 
         status, saved = submit()
         self.assertEqual(status, 200)
-        self.assertEqual(saved["annotations"], {"qwen": "Human edit"})
+        self.assertEqual(saved["annotations"], {"medgemma": "Human edit"})
         self.assertEqual(InspectorStore(self.outputs).frame(record_id, "f0")["curation"], saved)
         for raw in (b"NaN", b"[]", b'{"action":"edit","action":"delete"}', b"\xff",
-                    b'{"annotations":{"qwen":"\\ud800"}}'):
+                    b'{"annotations":{"medgemma":"\\ud800"}}'):
             self.assertEqual(submit(raw=raw)[0], 400)
         self.assertEqual(submit({**request, "review_identity": "b" * 64})[0], 409)
         self.assertEqual(submit(path=f"/api/records/{record_id}/frames/missing/curation")[0], 404)
@@ -676,7 +604,7 @@ class InspectorTests(unittest.TestCase):
                     self.assertIn("Sec-Fetch-Mode", headers["Vary"])
                     if method == "GET":
                         self.assertIn(b"Yasargil", body)
-                        self.assertNotIn(b"Qwen draft", body)
+                        self.assertNotIn(b"Instrument jaws are visible.", body)
                     else:
                         self.assertEqual(body, b"")
 

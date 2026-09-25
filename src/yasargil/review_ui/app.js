@@ -156,7 +156,7 @@ async function refreshRecords() {
     if (!state.records.length) return;
     let remembered;
     try { remembered = localStorage.getItem("yasargil-active-record"); } catch { /* optional browser persistence */ }
-    const selected = state.records.find((r) => r.id === state.record?.id) || state.records.find((r) => r.id === remembered) || state.records.find((r) => r.case_id === "S6A3" && r.qwen_annotation_count > 0) || state.records[0];
+    const selected = state.records.find((r) => r.id === state.record?.id) || state.records.find((r) => r.id === remembered) || state.records[0];
     select.value = selected.id;
     await loadRecord(selected.id, selected.id === state.record?.id ? state.index : null);
     $("workspace-status").textContent = result.warnings?.length ? `${result.warnings.length} unavailable or incomplete artifact(s). Available evidence is shown.` : `${state.records.length} record${state.records.length === 1 ? "" : "s"}`;
@@ -290,7 +290,7 @@ async function selectFrame(index, { scroll = false } = {}) {
   updateTimelineSelection(); renderReview();
   if (scroll) { const x = timelineX(frame.timestamp_ms); const viewport = $("timeline-scroll"); if (x < viewport.scrollLeft + 20 || x > viewport.scrollLeft + viewport.clientWidth - 20) viewport.scrollLeft = x - viewport.clientWidth / 2; }
   state.request?.abort(); const controller = new AbortController(); state.request = controller;
-  ["qwen-content", "medgemma-content", "selection-context", "supporting-evidence", "source-annotations", "provenance", "artifact-links", "raw-data"].forEach(clear);
+  ["medgemma-content", "selection-context", "supporting-evidence", "source-annotations", "provenance", "artifact-links", "raw-data"].forEach(clear);
   $("frame-loading").hidden = false;
   try {
     const detail = await api(`/api/records/${encodeURIComponent(state.record.id)}/frames/${encodeURIComponent(frame.frame_id)}`, controller.signal);
@@ -302,27 +302,6 @@ async function selectFrame(index, { scroll = false } = {}) {
 
 function pending(container, title) { const box = element("div", "pending-block"); box.append(element("strong", "", title)); container.append(box); }
 function detailsBox(title) { const details = element("details", "context-details"); const summary = element("summary"); summary.append(element("span", "", title), element("span", "", "+")); details.append(summary); return details; }
-function evidenceButton(label, frameId, ms) {
-  const button = element("button", "evidence-chip", label);
-  const index = frameId ? state.record.frames.findIndex((f) => f.frame_id === frameId) : nearestFrame(ms);
-  button.disabled = index < 0;
-  button.addEventListener("click", () => selectFrame(index, { scroll: true }));
-  return button;
-}
-function renderAnnotation(container, annotation) {
-  container.append(element("span", "annotation-label", "VISIBLE IN THIS FRAME"), element("p", "annotation-description", annotation.visible_observation || "No visible observation was saved."));
-  if (annotation.visibility) container.append(element("span", "visibility", `Visibility: ${humanize(annotation.visibility)}`));
-  if (annotation.contextual_claims?.length) {
-    const details = detailsBox(`Video context · ${annotation.contextual_claims.length}`);
-    annotation.contextual_claims.forEach((claim) => {
-      const item = element("div", "context-claim"); item.append(element("p", "", claim.claim));
-      for (const interval of claim.evidence_intervals || []) item.append(evidenceButton(`${formatTime(interval.start_ms)}–${formatTime(interval.end_ms)} ↗`, null, interval.start_ms));
-      for (const id of claim.evidence_frame_ids || []) { const f = state.record.frames.find((row) => row.frame_id === id); if (f) item.append(evidenceButton(`${formatTime(f.timestamp_ms)} ↗`, id)); }
-      details.append(item);
-    }); container.append(details);
-  }
-  if (annotation.uncertainties?.length) { const section = element("div", "uncertainties"); section.append(element("strong", "", "UNCERTAINTY")); annotation.uncertainties.forEach((text) => section.append(element("p", "", text))); container.append(section); }
-}
 function renderIndependentAnnotation(container, annotation, evidence) {
   container.append(element("span", "visibility", `Visibility: ${humanize(annotation.visibility)}`));
   for (const [support, label] of [["target_visible", "VISIBLE IN THIS FRAME"], ["context_supported", "CONTEXT-SUPPORTED INTERPRETATION"]]) {
@@ -351,7 +330,7 @@ function renderIndependentAnnotation(container, annotation, evidence) {
   }
 }
 function renderDetail(detail) {
-  ["qwen-content", "medgemma-content", "selection-context", "supporting-evidence"].forEach(clear);
+  ["medgemma-content", "selection-context", "supporting-evidence"].forEach(clear);
   const frame = detail.frame || state.record.frames[state.index];
   $("image-filename").textContent = frame.source_path?.split("/").pop() || frame.frame_id;
   const selection = detail.raw?.selection || frame.selection || frame;
@@ -365,52 +344,31 @@ function renderDetail(detail) {
     if (frame.coverage_override || selection.coverage_override) details.append(element("p", "", "Retained as a coverage anchor even though Qwen suggested dropping it."));
     box.append(details); $("selection-context").append(box);
   }
-  $("qwen-block").hidden = !detail.qwen;
-  $("enhancement-models").classList.toggle("single-model", !detail.qwen);
-  if (detail.qwen) renderAnnotation($("qwen-content"), detail.qwen);
-  const review = detail.medgemma;
-  const independent = detail.medgemma_protocol === "medgemma-frame-annotation-v1" || review?.schema_version === "medgemma-frame-annotation-v1";
-  $("medgemma-state").textContent = independent ? "INDEPENDENT ANNOTATION" : review ? `HISTORICAL REVIEW · ${humanize(review.assessment || "EVIDENCE REVIEW").toUpperCase()}` : "";
-  if (review) {
-    if (independent) renderIndependentAnnotation($("medgemma-content"), review, detail.evidence || []);
-    else renderAnnotation($("medgemma-content"), review.revised_annotation || review);
-    if (review.corrections?.length) {
-      const corrections = detailsBox(`Corrections · ${review.corrections.length}`);
-      for (const correction of review.corrections) { const row = element("div", "correction"); row.append(element("p", "muted", `Original: ${correction.original_text}`), element("p", "", `Revised: ${correction.revised_text}`), element("p", "muted", correction.reason)); corrections.append(row); }
-      $("medgemma-content").append(corrections);
-    }
-    if (!independent && (review.status === "needs_more_evidence" || review.evidence_requests?.length)) {
-      const box = element("div", "deferred-box"); box.append(element("h4", "", "More evidence requested"), element("p", "", "Deferred"));
-      for (const request of review.evidence_requests || []) { const item = element("div", "request-item"); item.append(element("strong", "", request.question), element("p", "", request.reason)); if (Number.isFinite(request.start_ms)) item.append(evidenceButton(`${formatTime(request.start_ms)}–${formatTime(request.end_ms)} ↗`, null, request.start_ms)); box.append(item); }
-      $("medgemma-content").append(box);
-    }
-  } else pending($("medgemma-content"), "Awaiting independent MedGemma annotation");
-  for (const model of ["qwen", "medgemma"]) {
-    const content = $(`${model}-content`), present = Boolean(detail[model]);
-    $(`${model}-block`).classList.toggle("has-ai", present);
-    if (!present) continue;
+  const annotation = detail.medgemma, content = $("medgemma-content");
+  $("medgemma-state").textContent = annotation ? "INDEPENDENT ANNOTATION" : "";
+  $("medgemma-block").classList.toggle("has-ai", Boolean(annotation));
+  if (annotation) {
     const original = element("div", "ai-content");
-    original.append(...content.childNodes);
-    const override = detail.curation?.annotations?.[model];
+    renderIndependentAnnotation(original, annotation, detail.evidence || []);
+    const override = detail.curation?.annotations?.medgemma;
     if (typeof override === "string") {
       const revision = element("section", "human-revision");
       revision.append(element("span", "annotation-label", "HUMAN-EDITED ANNOTATION"), element("p", "human-description", override || "Annotation cleared by human editor."));
       content.append(revision);
       const source = detailsBox("Original AI-generated annotation"); source.classList.add("ai-original"); source.append(original); content.append(source);
     } else content.append(original);
-  }
+  } else pending(content, "Awaiting independent MedGemma annotation");
   const evidence = detail.evidence || [];
   if (evidence.length) {
-    $("supporting-evidence").append(element("p", "support-label", `${review ? "Evidence supplied to MedGemma" : "Prepared annotation evidence"} · ${evidence.length} ${independent ? "image views" : "frames"}`));
+    $("supporting-evidence").append(element("p", "support-label", `${annotation ? "Evidence supplied to MedGemma" : "Prepared annotation evidence"} · ${evidence.length} image views`));
     const strip = element("div", "support-strip");
-    evidence.forEach((frame) => {
-      const button = element(independent ? "a" : "button", "support-thumb"), image = element("img"), url = localURL(frame.image_url);
-      if (url) { image.src = url; if (independent) { button.href = url; button.target = "_blank"; button.rel = "noopener"; } }
-      image.loading = "lazy"; image.alt = `${frame.view_id || "Evidence"} at ${formatTime(frame.timestamp_ms)}`;
-      button.append(image, element("span", "", `${frame.view_id ? `${frame.view_id} · ` : ""}${formatTime(frame.timestamp_ms)} · ${(frame.evidence_roles || frame.roles || []).join(", ")}`));
-      if (frame.role === "target_detail") button.append(element("span", "muted", `Source bounds: ${(frame.bounds || []).join(", ")}`));
-      if (!independent) button.addEventListener("click", () => { const index = state.record.frames.findIndex((f) => f.frame_id === frame.frame_id); if (index >= 0) selectFrame(index, { scroll: true }); });
-      strip.append(button);
+    evidence.forEach((view) => {
+      const link = element("a", "support-thumb"), image = element("img"), url = localURL(view.image_url);
+      if (url) { image.src = url; link.href = url; link.target = "_blank"; link.rel = "noopener"; }
+      image.loading = "lazy"; image.alt = `${view.view_id} at ${formatTime(view.timestamp_ms)}`;
+      link.append(image, element("span", "", `${view.view_id} · ${formatTime(view.timestamp_ms)} · ${(view.roles || []).join(", ")}`));
+      if (view.role === "target_detail") link.append(element("span", "muted", `Source bounds: ${(view.bounds || []).join(", ")}`));
+      strip.append(link);
     });
     $("supporting-evidence").append(strip);
   }
@@ -423,7 +381,7 @@ function renderCuration() {
   const enhancedFrame = status === "selected" || status === "dropped";
   $("pane-annotations").hidden = !enhancedFrame;
   $("supporting-evidence").hidden = !enhancedFrame;
-  const available = enhancedFrame && Boolean(detail?.qwen || detail?.medgemma);
+  const available = enhancedFrame && Boolean(detail?.medgemma);
   const busy = state.curationBusy || state.exportBusy;
   $("edit-enhancement").disabled = !available || deleted || busy;
   $("delete-enhancement").disabled = !available || busy;
@@ -433,41 +391,22 @@ function renderCuration() {
   $("enhancement-deleted").hidden = !deleted;
   $("enhancement-models").hidden = deleted;
 }
-function annotationText(model) {
-  const value = state.detail?.[model];
-  if (!value) return "";
-  const annotation = value.revised_annotation || value;
-  if (annotation.schema_version === "medgemma-frame-annotation-v1") {
-    const claims = (annotation.claims || []).map((claim) => `${humanize(claim.support)} · ${humanize(claim.category)}: ${claim.statement}\nEvidence: ${(claim.evidence_view_ids || []).join(", ")}${claim.uncertainty ? `\nUncertainty: ${claim.uncertainty}` : ""}`);
-    const questions = (annotation.unresolved_questions || []).map((question) => `${question.question} ${question.reason} (Evidence needed: ${humanize(question.kind)})`);
-    return [`Visibility: ${humanize(annotation.visibility)}`, ...claims, ...(questions.length ? ["Unresolved questions:", ...questions] : [])].join("\n\n");
-  }
-  const parts = [annotation.visible_observation || ""];
-  if (annotation.visibility) parts.push(`Visibility: ${humanize(annotation.visibility)}`);
-  if (annotation.contextual_claims?.length) parts.push("Video context:\n" + annotation.contextual_claims.map((claim) => {
-    const intervals = (claim.evidence_intervals || []).map((range) => `${formatTime(range.start_ms)}–${formatTime(range.end_ms)}`);
-    const frames = (claim.evidence_frame_ids || []).map((id) => `frame ${id}`);
-    const evidence = [...intervals, ...frames];
-    return `${claim.claim}${evidence.length ? ` [Evidence: ${evidence.join(", ")}]` : ""}`;
-  }).join("\n"));
-  if (annotation.uncertainties?.length) parts.push("Uncertainties:\n" + annotation.uncertainties.join("\n"));
-  if (value.corrections?.length) parts.push("Corrections:\n" + value.corrections.map((row) => `${row.original_text} → ${row.revised_text}\n${row.reason}`).join("\n"));
-  if (value.evidence_requests?.length) parts.push("More evidence requested:\n" + value.evidence_requests.map((row) => [row.question, row.reason].filter(Boolean).join("\n")).join("\n"));
-  return parts.join("\n\n");
+function annotationText() {
+  const annotation = state.detail?.medgemma;
+  if (!annotation) return "";
+  const claims = (annotation.claims || []).map((claim) => `${humanize(claim.support)} · ${humanize(claim.category)}: ${claim.statement}\nEvidence: ${(claim.evidence_view_ids || []).join(", ")}${claim.uncertainty ? `\nUncertainty: ${claim.uncertainty}` : ""}`);
+  const questions = (annotation.unresolved_questions || []).map((question) => `${question.question} ${question.reason} (Evidence needed: ${humanize(question.kind)})`);
+  return [`Visibility: ${humanize(annotation.visibility)}`, ...claims, ...(questions.length ? ["Unresolved questions:", ...questions] : [])].join("\n\n");
 }
 function curationTarget() {
   return { record_id: state.record.id, frame_id: state.record.frames[state.index].frame_id, review_identity: state.record.review_identity, expected_updated_at: state.detail?.curation?.updated_at || null };
 }
 function openEditor() {
   if (!state.detail || state.curationBusy || state.exportBusy || state.detail.curation?.deleted) return;
+  if (!state.detail.medgemma) return;
   $("surgery-video").pause();
-  const initial = {};
-  for (const model of ["qwen", "medgemma"]) {
-    const available = Boolean(state.detail[model]);
-    $(`edit-${model}-field`).hidden = !available;
-    if (available) { initial[model] = state.detail.curation?.annotations?.[model] ?? annotationText(model); $(`edit-${model}`).value = initial[model]; }
-  }
-  if (!Object.keys(initial).length) return;
+  const initial = { medgemma: state.detail.curation?.annotations?.medgemma ?? annotationText() };
+  $("edit-medgemma").value = initial.medgemma;
   state.editor = { ...curationTarget(), initial };
   $("editor-frame").textContent = `${state.record.case_id || state.record.title} · Frame ${state.index + 1} · ${formatTime(state.record.frames[state.index].timestamp_ms, true)}`;
   $("editor-error").hidden = true;
@@ -476,7 +415,7 @@ function openEditor() {
 function closeEditor() { if (!state.curationBusy) { $("enhancement-editor").close(); state.editor = null; } }
 function curationBusy(value) {
   state.curationBusy = value; renderCuration();
-  ["editor-save", "editor-cancel", "editor-close", "edit-qwen", "edit-medgemma"].forEach((id) => { $(id).disabled = value; });
+  ["editor-save", "editor-cancel", "editor-close", "edit-medgemma"].forEach((id) => { $(id).disabled = value; });
   $("editor-save").textContent = value ? "Saving…" : "Save revision";
   $("export").disabled = value || state.exportBusy || !state.record;
 }

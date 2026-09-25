@@ -158,15 +158,9 @@ temporal citations have been unreliable, and early MedGemma reviews have made
 few substantive corrections. See the [research status](../README.md#research-status-and-known-limitations).
 Those protocol and quality investigations remain ongoing after the backend change.
 
-New [frame annotation](FRAME_ANNOTATION.md) requests address invented citation
-coordinates by asking Qwen for existing source-frame IDs, then resolving their
-timestamps in application code. The full source-reference inventory and enum
-constraints supplement the complete native video and selected stills. The
-runtime still uses `--video-fps 0` and verifies every source frame. The later
-[Qwen runtime patch](#build-the-qwen-complete-video-runtime) separately corrects
-frame grouping, time-label placement, and generation controls. Source-frame
-citations prevent invented coordinates; they do not establish event localization.
-An existing frame can still be the wrong evidence for a claim.
+The complete-video runtime uses `--video-fps 0` and verifies every source frame.
+The [Qwen runtime patch](#build-the-qwen-complete-video-runtime) corrects frame
+grouping, time-label placement, and generation controls.
 
 There is no Ollama client, backend selector or automatic fallback in the active
 inference path. The former `--ollama-url` and `models --pull` options are removed.

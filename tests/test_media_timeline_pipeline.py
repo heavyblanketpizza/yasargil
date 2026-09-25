@@ -9,9 +9,6 @@ import unittest
 from jsonschema import Draft202012Validator, ValidationError
 from PIL import Image
 
-from yasargil.annotation_contract import annotation_schema, build_annotations
-from yasargil.contract import ContractError
-from yasargil.frame_annotation import AnnotationConfig, _messages as annotation_messages
 from yasargil.gap_experiment import GapConfig, _audit_schema, _initial_messages as gap_messages
 from yasargil.smart_selection import (
     SelectionConfig, initial_messages, retrieve_requests, review_schema, stage_media,
@@ -55,9 +52,6 @@ class MediaTimelinePipelineTests(unittest.TestCase):
             yield "ranking" if ranking else "gap_audit", gap_messages(
                 self.source, self.frames, self.names, self.video_name,
                 GapConfig(procedure_context=self.context), ranking=ranking)
-        yield "annotation", annotation_messages(
-            self.source, self.frames, self.names, self.video_name,
-            AnnotationConfig(procedure_context=self.context))
 
     def test_preparation_uses_frames_divided_by_fps_despite_neighboring_repair_metadata(self):
         self.assertEqual(self.prepared["duration_ms"], 2000)
@@ -94,7 +88,7 @@ class MediaTimelinePipelineTests(unittest.TestCase):
                 self.assertEqual(overview["media_timeline"]["authority"], "supplied_video_playback")
                 self.assertIs(overview["media_timeline"]["repair_time_used"], False)
                 self.assertEqual(overview["complete_video_frame_count"], 4)
-                self.assertEqual(overview.get("candidate_ids", overview.get("frame_ids")), self.ids)
+                self.assertEqual(overview["candidate_ids"], self.ids)
                 videos = [block for block in blocks if block["type"] == "input_video"]
                 self.assertEqual(videos, [{"type": "input_video", "input_video": {"url": "file://" + self.video_name}}])
                 images = [block["image_url"]["url"] for block in blocks if block["type"] == "image_url"]
@@ -134,29 +128,6 @@ class MediaTimelinePipelineTests(unittest.TestCase):
             with self.subTest(direct_retrieval_outside=outside), self.assertRaises(VideoSourceError):
                 retrieve_requests(self.source, self.review(outside)["searches"], self.ids[:3], 3)
 
-    def annotation(self, end_ms):
-        return {"context_check": "uncertain", "annotations": {self.ids[-1]: {
-            "visible_observation": "The field is yellow.", "visibility": "clear", "uncertainties": [],
-            "contextual_claims": [{"claim": "Yellow is visible at the end of the supplied sequence.",
-                                   "evidence_intervals": [{"start_ms": 1500, "end_ms": end_ms}]}]}}}
-
-    def test_annotation_evidence_uses_same_endpoint_without_fabricating_repair_clock(self):
-        selected = [self.frames[-1]]
-        schema = annotation_schema([self.ids[-1]], media_timeline(self.source)["duration_ms"])
-        Draft202012Validator(schema).validate(self.annotation(2000))
-        result = build_annotations(self.annotation(2000), selected, self.source)
-        record = result["annotations"][0]
-        self.assertEqual({key: record[key] for key in selected[0]}, selected[0])
-        evidence = record["contextual_claims"][0]["evidence_intervals"][0]
-        self.assertEqual(evidence["supporting_frames"], selected)
-        self.assertEqual((evidence["start_ms"], evidence["end_ms"]), (1500, 2000))
-        self.assertIs(record["source_acquisition_time"], None)
-        for outside in (2000.001, self.source["recorded_repair_time_ms"]):
-            with self.subTest(outside=outside), self.assertRaises(ValidationError):
-                Draft202012Validator(schema).validate(self.annotation(outside))
-            with self.assertRaises(ContractError):
-                build_annotations(self.annotation(outside), selected, self.source)
-
     def test_duration_relabeling_is_rejected_even_when_every_frame_timestamp_is_unchanged(self):
         self.source["duration_ms"] = self.source["recorded_repair_time_ms"]
         self.assertEqual([frame["timestamp_ms"] for frame in self.frames], [0, 500, 1000, 1500])
@@ -164,13 +135,11 @@ class MediaTimelinePipelineTests(unittest.TestCase):
             validate_native_timeline(self.source)
         with self.assertRaises(VideoSourceError):
             media_timeline(self.source)
-        for stage in ("selection", "ranking", "gap_audit", "annotation"):
+        for stage in ("selection", "ranking", "gap_audit"):
             with self.subTest(stage=stage), self.assertRaises(VideoSourceError):
                 # Construct just this stage: generators fail at the requested prompt.
                 if stage == "selection":
                     initial_messages(self.source, self.frames, [], self.names, self.video_name, SelectionConfig())
-                elif stage == "annotation":
-                    annotation_messages(self.source, self.frames, self.names, self.video_name, AnnotationConfig())
                 else:
                     gap_messages(self.source, self.frames, self.names, self.video_name, GapConfig(), ranking=stage == "ranking")
 

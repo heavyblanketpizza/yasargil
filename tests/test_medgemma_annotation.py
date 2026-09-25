@@ -10,12 +10,62 @@ from unittest.mock import patch
 
 from PIL import Image
 
-from test_frame_annotation import SelectionRuntime, read, write
 from yasargil.contract import ContractError, sha256_file
 from yasargil.llama_cpp import LlamaCppError
 from yasargil.medgemma_annotation import AnnotationConfig, run_annotation, request_annotation_pause
 from yasargil.smart_selection import SelectionConfig, review_loop
 from yasargil.video_source import prepare_video_source
+
+
+def read(path):
+    return json.loads(Path(path).read_text())
+
+
+def write(path, value):
+    Path(path).write_text(json.dumps(value))
+
+
+def publish_result(messages, schema, max_tokens, round_dir, output, frame_count):
+    """Save the immutable transport receipts used by real native inference."""
+    request = {"messages": copy.deepcopy(messages), "max_tokens": max_tokens,
+               "response_format": {"type": "json_schema", "json_schema": {"schema": schema}}}
+    response = {"choices": [{"finish_reason": "stop", "message": {
+        "role": "assistant", "content": json.dumps(output)}}],
+        "usage": {"prompt_tokens": 100, "completion_tokens": 50, "total_tokens": 150}}
+    overview = json.loads(messages[1]["content"][0]["text"])
+    video_url = next(block["input_video"]["url"] for block in messages[1]["content"]
+                     if block["type"] == "input_video")
+    round_dir.mkdir(parents=True, exist_ok=True)
+    write(round_dir / "request.json", request)
+    verification = {
+        "accepted": True, "full_source_video_verified": True,
+        "context_truncation_observed": False, "finish_reason": "stop",
+        "video_sha256": overview["video_sha256"],
+        "video_relative_path": video_url.removeprefix("file://"),
+        "video_fps_setting": 0, "expected_video_frames": frame_count,
+        "decoded_frame_ids": list(range(frame_count)), "decoded_frames": frame_count,
+        "request_sha256": sha256_file(round_dir / "request.json"),
+    }
+    result = {"output": output, "response": response, "verification": verification}
+    for name, value in (("response.json", response), ("verification.json", verification),
+                        ("output.json", output), ("result.json", result)):
+        write(round_dir / name, value)
+    return result
+
+
+class SelectionRuntime:
+    def __init__(self, kept_ids, frame_count):
+        self.kept_ids, self.frame_count = set(kept_ids), frame_count
+
+    def chat(self, messages, *, schema, max_tokens, round_dir):
+        ids = schema["properties"]["decisions"]["required"]
+        output = {
+            "scene_summary": "PRIVATE_SELECTOR_SCENE_DESCRIPTION",
+            "context_check": "consistent", "ready": True, "searches": [],
+            "decisions": {key: {"decision": "keep" if key in self.kept_ids else "drop",
+                                "reason": "PRIVATE_SELECTOR_KEEP_DROP_REASON"} for key in ids},
+        }
+        return publish_result(messages, schema, max_tokens, round_dir, output, self.frame_count)
 
 
 class FakeClient:
@@ -97,6 +147,33 @@ class AnnotationTests(unittest.TestCase):
         self.assertFalse(doc['training_eligible'])
         self.assertTrue((self.output / 'report.html').is_file())
         self.assertEqual(read(self.output / 'source.json'), self.source)
+
+    def test_selection_must_be_finished_and_match_last_actual_model_review(self):
+        selection_path = self.selection / 'selection.json'
+        original = read(selection_path)
+        def unfinished(value):
+            value['status'] = 'awaiting_review'
+        def changed_selected_ids(value):
+            value['selected_frame_ids'] = self.ids
+        def invented_reason(value):
+            value['frames'][0]['model_reason'] = 'Changed after model review.'
+        def changed_source_locator(value):
+            value['frames'][0]['timestamp_ms'] = 999
+        def unsupported_full_video(value):
+            value['completed_rounds_full_video_verified'] = False
+        for index, change in enumerate((unfinished, changed_selected_ids, invented_reason,
+                                        changed_source_locator, unsupported_full_video)):
+            with self.subTest(change=change.__name__):
+                self.output = self.root / f'invalid-selection-{index}'
+                value = copy.deepcopy(original)
+                change(value)
+                write(selection_path, value)
+                client = FakeClient()
+                with self.assertRaises(ContractError):
+                    self.run_pass(client)
+                self.assertEqual(client.requests, [])
+                self.assertFalse(self.output.exists())
+        write(selection_path, original)
 
     def test_prepare_and_resume_and_completed_resume_make_no_duplicate_calls(self):
         client = FakeClient()

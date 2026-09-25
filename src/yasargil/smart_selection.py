@@ -369,6 +369,68 @@ def _recover_verified_result(round_dir, source, messages, candidate_ids, config,
     return result
 
 
+def validate_completed_selection(directory, selection_run, *, snapshot=False):
+    """Tie effective keeps to canonical source rows and the completed raw review."""
+    from .llama_video import _strict_json
+
+    def read(path):
+        try:
+            return _strict_json(Path(path).read_bytes())
+        except (ValueError, OSError) as exc:
+            raise ContractError(f"Cannot read selection evidence {path}: {exc}") from exc
+
+    directory, selection_run = Path(directory), Path(selection_run)
+    parent = read(directory / ("selection-run.json" if snapshot else "run.json"))
+    source = read(directory / "source/source.json")
+    record = read(directory / "selection.json")
+    state = read(directory / ("selection-state.json" if snapshot else "state.json"))
+    initial = read(directory / "initial-selection.json")
+    require(parent.get("schema_version") == "smart-frame-selection-run-v1"
+            and record.get("schema_version") == "smart-frame-selection-v1", "Expected a normal smart-selection run")
+    require(parent["source_manifest_sha256"] == sha256_file(directory / "source/source.json"),
+            "Selection source manifest changed")
+    require(record.get("status") == state.get("status") == "completed"
+            and record.get("completed_rounds_full_video_verified") is True
+            and not record.get("unresolved_searches"), "Annotate only a completed, fully reviewed selection")
+    frames = source["frames"]
+    by_id = {f["frame_id"]: f for f in frames}
+    require(len(by_id) == len(frames) == source["expected_video_frames"], "Invalid canonical source frame inventory")
+    ids = state["candidate_ids"]
+    require(len(ids) == len(set(ids)) and set(ids) <= by_id.keys(), "Selection contains unknown/duplicate candidates")
+    require(set(initial["protected_ids"]) <= set(ids), "Invalid protected selection anchors")
+    require(state["rounds"] and state["next_round"] == len(state["rounds"]), "Selection lacks completed review receipts")
+    require(record == _selection_record(source, state, initial["protected_ids"], selection_run),
+            "Final selection differs from the saved source and review state")
+    for row in record["rounds"]:
+        receipt = row["verification"]
+        require(receipt.get("accepted") is True and receipt.get("full_source_video_verified") is True
+                and receipt.get("context_truncation_observed") is False
+                and receipt.get("video_sha256") == source["video_sha256"]
+                and receipt.get("decoded_frame_ids") == list(range(len(frames))),
+                "Selection review did not verify the complete video")
+    last = state["rounds"][-1]
+    original_round = selection_run / "rounds" / f"round-{last['round']:02d}"
+    require(Path(last["directory"]).resolve() == original_round.resolve(), "Selection review location changed")
+    round_dir = directory / "selection-review" if snapshot else original_round
+    video_name = "video" + (Path(source["video_path"]).suffix.lower() or ".mp4")
+    require(len(state["messages"]) >= 3 and state["messages"][-1].get("role") == "assistant",
+            "Selection lacks its final assistant response")
+    parent_config = selection_config_from_saved(parent["config"])
+    result = _recover_verified_result(round_dir, source, state["messages"][:-1], ids,
+                                     parent_config, video_name)
+    raw_message = result["response"]["choices"][0]["message"]
+    require(state["messages"][-1] == {"role": "assistant", "content": raw_message["content"]}
+            and state["last_output"] == result["output"], "Selection state differs from its verified raw response")
+    validate_review(result["output"], ids, source["duration_ms"], review_mode=parent_config.review_mode)
+    require(result["output"]["ready"] is True and result["output"]["context_check"] != "conflict",
+            "Selection is not ready for annotation")
+    selected_ids = record["selected_frame_ids"]
+    require(1 <= len(selected_ids) <= 96 and len(set(selected_ids)) == len(selected_ids),
+            "Annotation requires 1–96 uniquely selected frames")
+    selected = sorted([by_id[f] for f in selected_ids], key=lambda f: (f["timestamp_ms"], f["frame_index"]))
+    return parent, source, selected, original_round
+
+
 def review_loop(source, initial, output, config, runtime, *, state=None, progress=print):
     """Review a frozen set once; retain legacy retrieval replay for historical callers."""
     config.validate()

@@ -128,11 +128,7 @@ main { max-width: 1480px; margin: auto; padding: 24px 28px 0; }
 .enhancement-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
 .enhancement-label { font-size: 10px; color: var(--muted); }
 .enhancement-actions { display: flex; gap: 7px; }
-#enhancement-models { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
-.annotation-block { min-width: 0; padding: 0 22px 20px 0; }
-.medgemma-block { border-left: 1px solid var(--line); padding: 0 0 20px 22px; }
-#enhancement-models.single-model { grid-template-columns: minmax(0, 1fr); }
-#enhancement-models.single-model .medgemma-block { border: 0; padding: 0 0 20px; }
+.annotation-block { min-width: 0; padding: 0 0 20px; }
 .model-heading { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; }
 .model-heading h3 { font-size: 14px; }
 .model-identity { color: var(--muted); font-size: 10px; margin-top: 4px; }
@@ -163,9 +159,6 @@ main { max-width: 1480px; margin: auto; padding: 24px 28px 0; }
 .deferred-box > p { font-size: 9px; color: #666; margin-top: 3px; }
 .request-item { padding-top: 10px; font-size: 11px; overflow-wrap: anywhere; }
 .request-item p { font-size: 10px; color: #666; margin-top: 4px; }
-.correction { font-size: 10px; border-bottom: 1px solid var(--line); padding-bottom: 10px; margin-bottom: 10px; overflow-wrap: anywhere; }
-.correction p { margin-top: 6px; }
-.correction .muted { font-size: 9px; }
 .human-revision { border-left: 2px solid var(--ink); padding: 4px 0 4px 12px; }
 .human-description { white-space: pre-wrap; }
 .ai-original { margin-bottom: 5px; }
@@ -256,8 +249,6 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 10px; line-heig
   .timeline-footer { flex-wrap: wrap; gap: 6px; }
   .legend { gap: 6px 15px; }
   .timeline-footer > .mono { margin-left: auto; }
-  .annotation-block { padding-right: 16px; }
-  .medgemma-block { padding-right: 0; padding-left: 16px; }
 }
 @media (max-width: 540px) {
   .app-header { padding: 0 14px; height: 58px; gap: 12px; }
@@ -296,9 +287,7 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 10px; line-heig
   .key-nav { width: 20px; }
   .data-panel-heading { padding: 11px 13px; }
   .annotation-section { padding: 14px 13px 0; }
-  #enhancement-models { grid-template-columns: minmax(0, 1fr); }
   .annotation-block { padding: 0 0 18px; }
-  .medgemma-block { border-left: 0; border-top: 1px solid var(--line); padding-top: 18px; }
   .human-review-section { padding: 14px 13px; }
   .review-states { gap: 6px; }
   .review-states button { padding: 4px 7px; font-size: 8px; }

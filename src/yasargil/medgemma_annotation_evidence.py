@@ -8,11 +8,12 @@ from __future__ import annotations
 import copy
 import hashlib
 from io import BytesIO
+import math
 from pathlib import Path
+import re
 
 from PIL import Image
 
-from .annotation_contract import _source_index
 from .contract import ContractError, require, sha256_file
 from .video_source import media_timeline
 
@@ -24,6 +25,66 @@ FRAME_FIELDS = (
     "time_base", "source_timestamp_ms", "source_acquisition_time", "video_pts",
     "video_time_base", "width", "height",
 )
+
+
+def _number(value, label, *, minimum=None):
+    try:
+        finite = isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+    except OverflowError:
+        finite = False
+    require(finite and (minimum is None or value >= minimum), f"Invalid {label}")
+    return value
+
+
+def _positive(value, label):
+    _number(value, label, minimum=0)
+    require(value > 0, f"Invalid {label}")
+    return value
+
+
+def _path(value, label):
+    require(isinstance(value, str) and value.strip() and Path(value).is_absolute(), f"Invalid {label}")
+
+
+def _hash(value, label):
+    require(isinstance(value, str) and re.fullmatch(r"[0-9a-fA-F]{64}", value) is not None,
+            f"Invalid {label}")
+
+
+def _source_index(source):
+    require(isinstance(source, dict), "Source manifest must be an object")
+    duration = _positive(source.get("duration_ms"), "source duration")
+    _path(source.get("source_path"), "source path")
+    _hash(source.get("source_sha256"), "source hash")
+    frames = source.get("frames")
+    require(isinstance(frames, list) and frames, "Source manifest needs observed frames")
+    count = source.get("expected_video_frames")
+    require(type(count) is int and count == len(frames), "Source frame count differs from expected video frames")
+    result, previous_index, previous_time = {}, -1, -1
+    for frame in frames:
+        require(isinstance(frame, dict), "Canonical source frame must be an object")
+        frame_id = frame.get("frame_id")
+        require(isinstance(frame_id, str) and frame_id.strip() and frame_id not in result,
+                "Invalid or duplicate canonical source frame ID")
+        index = frame.get("frame_index")
+        require(type(index) is int and index > previous_index, "Source frame indices must be unique and increasing")
+        timestamp = _number(frame.get("timestamp_ms"), "source frame timestamp", minimum=0)
+        require(previous_time < timestamp <= duration, "Source frame timestamps must increase within source duration")
+        require(frame.get("timestamp_basis") in ("source_pts", "reconstructed_nominal"),
+                "Invalid source frame timestamp basis")
+        for field in ("source_path", "image_path"):
+            _path(frame.get(field), f"canonical frame {field}")
+        for field in ("source_sha256", "image_sha256"):
+            _hash(frame.get(field), f"canonical frame {field}")
+        release_index = frame.get("release_frame_index")
+        require(release_index is None or (type(release_index) is int and release_index > 0),
+                "Invalid released source frame index")
+        if frame["timestamp_basis"] == "reconstructed_nominal":
+            require(all(frame.get(field) is None for field in ("source_pts", "time_base", "source_timestamp_ms")),
+                    "Reconstructed frames cannot claim original capture PTS")
+        result[frame_id] = frame
+        previous_index, previous_time = index, timestamp
+    return result, duration
 
 
 def canonical_frame(frame):

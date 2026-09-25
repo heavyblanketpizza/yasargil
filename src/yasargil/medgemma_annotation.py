@@ -11,12 +11,11 @@ from pathlib import Path
 
 from .checkpoint import atomic_bytes, atomic_json, directory_is_locked, directory_lock, durable_mkdir
 from .contract import ContractError, canonical_hash, require, sha256_file
-from .frame_annotation import _validate_selection
 from .llama_cpp import MEDGEMMA_MODEL, LlamaCppClient, LlamaCppError, _object, build_chat_request, encode_request
 from .llama_video import _strict_json
 from .medgemma_annotation_contract import ANNOTATION_SYSTEM, annotation_schema, build_annotation
 from .medgemma_annotation_evidence import build_evidence
-from .smart_selection import verify_assets
+from .smart_selection import validate_completed_selection, verify_assets
 
 
 PROTOCOL_VERSION = "medgemma-frame-annotation-v1"
@@ -94,7 +93,7 @@ def _prepare(selection_run, output, config):
             fcntl.flock(lock, fcntl.LOCK_SH | fcntl.LOCK_NB)
         except BlockingIOError as exc:
             raise ContractError("Selection is still active") from exc
-        selection_plan, source, selected, last_round = _validate_selection(parent, parent)
+        selection_plan, source, selected, last_round = validate_completed_selection(parent, parent)
         source_root = Path(source["source_path"]).resolve()
         if source["source_kind"] == "original_video":
             source_root = source_root.parent
@@ -316,7 +315,7 @@ def run_annotation(selection_run, output_dir, config=None, *, resume=False, prep
         config = saved_config
         for name, digest in plan["input_sha256"].items():
             require(sha256_file(_relative(output, name)) == digest, f"Frozen annotation input changed: {name}")
-        _, source, selected, _ = _validate_selection(output / "selection", Path(plan["selection_run"]), snapshot=True)
+        _, source, selected, _ = validate_completed_selection(output / "selection", Path(plan["selection_run"]), snapshot=True)
         require(source == _read(output / "source.json") and selected == _read(output / "selected-frames.json")
                 and len(source["frames"]) == plan["source_frame_count"]
                 and [row["frame_id"] for row in selected] == plan["frame_ids"], "Frozen target set changed")

@@ -65,15 +65,11 @@ uv run yasargil annotate-selected-frames \
 
 Use a new output directory outside the source dataset. See
 [MedGemma annotation](docs/MEDGEMMA_FRAME_ANNOTATION.md) for evidence, output,
-pause/resume, and evaluation. The separate
-[Qwen full-video annotation](docs/FRAME_ANNOTATION.md) remains available as a
-comparison; it is not a prerequisite or input to MedGemma. The former Qwen-to-MedGemma
-review and bounded enhancement runners have been removed. Saved historical
-artifacts remain available for inspection and verification.
+pause/resume, and evaluation.
 
 ## Inspect saved results
 
-For saved video selections, independent annotations, and historical reviews:
+For saved video selections and their MedGemma annotations:
 
 ```bash
 uv run yasargil inspect-dataset

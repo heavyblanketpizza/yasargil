@@ -25,7 +25,6 @@ PUBLIC_MARKDOWN = {
     "docs/DATASET_INSPECTOR.md",
     "docs/DATA_SOURCES.md",
     "docs/ENHANCEMENT.md",
-    "docs/FRAME_ANNOTATION.md",
     "docs/GAP_EXPERIMENT.md",
     "docs/HOW_QWEN_UNDERSTANDS_VIDEO.md",
     "docs/LLAMA_CPP.md",

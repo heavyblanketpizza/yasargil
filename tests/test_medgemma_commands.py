@@ -32,7 +32,7 @@ class MedGemmaCommandTests(unittest.TestCase):
             self.assertIn(command, text)
         for command in ("review-frame-annotations", "frame-review-status", "pause-frame-review",
                         "enhance-sospine", "enhance-sospine-batch", "resume-enhancement",
-                        "enhancement-status", "pause-enhancement"):
+                        "enhancement-status", "pause-enhancement", "annotate-video-frames"):
             self.assertNotIn(command, text)
             with self.subTest(command=command), redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as rejected:
                 main([command])
@@ -67,24 +67,6 @@ class MedGemmaCommandTests(unittest.TestCase):
                   "--before-frames", "0", "--after-frames", "0", "--no-detail-crops"])
         config = run.call_args.args[2]
         self.assertEqual((config.before_frames, config.after_frames, config.detail_crops), (0, 0, False))
-
-    def test_pair_help_requires_selection_instead_of_qwen_annotation_pair(self):
-        from yasargil import medgemma_pair
-        output = io.StringIO()
-        with patch("sys.argv", ["medgemma_pair", "--help"]), redirect_stdout(output), \
-                self.assertRaises(SystemExit) as raised:
-            medgemma_pair.main()
-        self.assertEqual(raised.exception.code, 0)
-        self.assertIn("--selection-batch", output.getvalue())
-        self.assertNotIn("--annotation-pair", output.getvalue())
-        self.assertNotIn("--allow-rejected-temporal-citations", output.getvalue())
-        for old_option in ("--annotation-pair", "--allow-rejected-temporal-citations"):
-            with self.subTest(option=old_option), patch("yasargil.medgemma_pair.run_pair") as run, \
-                    patch("sys.argv", ["medgemma_pair", "--output-dir", "/fixture/annotation", old_option, "/fixture/old"]), \
-                    redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as rejected:
-                medgemma_pair.main()
-            self.assertEqual(rejected.exception.code, 2)
-            run.assert_not_called()
 
 
 if __name__ == "__main__":

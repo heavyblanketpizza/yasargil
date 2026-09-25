@@ -43,10 +43,8 @@ def main(argv=None):
     add_selection_batch_parser(sub)
     from .gap_experiment import add_gap_parser
     add_gap_parser(sub)
-    from .frame_annotation import add_annotation_parser
+    from .medgemma_annotation import add_annotation_parser
     add_annotation_parser(sub)
-    from .medgemma_annotation import add_annotation_parser as add_medgemma_parser
-    add_medgemma_parser(sub)
     from .dataset_inspector import add_inspector_parser
     add_inspector_parser(sub)
     imp = sub.add_parser("import-sospine", help="Import a bounded source-derived draft, without inference")
@@ -91,23 +89,13 @@ def main(argv=None):
             inspector_cli(args)
             return
         if args.command == "annotate-selected-frames":
-            from .medgemma_annotation import annotation_cli as medgemma_cli
+            from .medgemma_annotation import annotation_cli
             with cooperative_stop() as should_stop:
-                medgemma_cli(args, should_stop=should_stop)
+                annotation_cli(args, should_stop=should_stop)
             return
         if args.command in {"medgemma-annotation-status", "pause-medgemma-annotation"}:
             from .medgemma_annotation import annotation_status, request_annotation_pause
             action = annotation_status if args.command == "medgemma-annotation-status" else request_annotation_pause
-            print(json.dumps(action(args.output_dir), indent=2))
-            return
-        if args.command == "annotate-video-frames":
-            from .frame_annotation import annotation_cli
-            with cooperative_stop() as should_stop:
-                annotation_cli(args, should_stop=should_stop)
-            return
-        if args.command in {"annotation-status", "pause-annotation"}:
-            from .frame_annotation import annotation_status, request_annotation_pause
-            action = annotation_status if args.command == "annotation-status" else request_annotation_pause
             print(json.dumps(action(args.output_dir), indent=2))
             return
         if args.command == "experiment-frame-gaps":

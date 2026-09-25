@@ -204,7 +204,7 @@ test('only selected and dropped frames show AI annotations, including while deta
     ui.state.record.frames[0].status = status;
     // Visibility follows the frame selection immediately, independent of a
     // previous response, deleted enhancement, or an annotation request in flight.
-    for (const detail of [null, { qwen: { visible_observation: 'Earlier result' } }, { curation: { deleted: true } }]) {
+    for (const detail of [null, { medgemma: { visibility: 'clear', claims: [] } }, { curation: { deleted: true } }]) {
       ui.state.detail = detail; ui.renderCuration();
       const hidden = status !== 'selected' && status !== 'dropped';
       assert.equal(ui.node('pane-annotations').hidden, hidden, status);
@@ -419,11 +419,11 @@ test('opening the dataset folder does not save or discard the current review dra
   assert.equal(ui.storage.writes, 0); assert.equal(ui.node('open-dataset-folder').disabled, false);
 });
 
-test('independent MedGemma claims display without a Qwen draft and link their image views', () => {
+test('independent MedGemma claims display and link their image views', () => {
   const ui = harness();
   ui.state.record.frames[0].status = 'selected';
   ui.state.detail = {
-    frame: ui.state.record.frames[0], qwen: null, medgemma_protocol: 'medgemma-frame-annotation-v1',
+    frame: ui.state.record.frames[0],
     medgemma: { schema_version: 'medgemma-frame-annotation-v1', visibility: 'partial', status: 'needs_more_evidence',
       claims: [
         {category: 'instrument', support: 'target_visible', statement: '<script>Instrument</script>', evidence_view_ids: ['f0:detail:1'], uncertainty: 'Subtype uncertain'},
@@ -437,8 +437,6 @@ test('independent MedGemma claims display without a Qwen draft and link their im
   ui.renderDetail(ui.state.detail);
   const descendants = (node) => [node, ...node.children.flatMap(descendants)];
   const content = descendants(ui.node('medgemma-content'));
-  assert.equal(ui.node('qwen-block').hidden, true);
-  assert.equal(ui.node('enhancement-models').classList.contains('single-model'), true);
   assert.equal(ui.node('medgemma-state').textContent, 'INDEPENDENT ANNOTATION');
   assert.ok(content.some(node => node.textContent === 'VISIBLE IN THIS FRAME'));
   assert.ok(content.some(node => node.textContent === 'CONTEXT-SUPPORTED INTERPRETATION'));
@@ -446,7 +444,7 @@ test('independent MedGemma claims display without a Qwen draft and link their im
   assert.ok(content.some(node => node.tagName === 'A' && node.href === 'http://127.0.0.1:8765/media/crop'));
   assert.ok(content.some(node => node.textContent === 'Which tissue?'));
   assert.ok(descendants(ui.node('supporting-evidence')).some(node => node.textContent === 'Source bounds: 0, 0, 8, 8'));
-  assert.match(ui.annotationText('medgemma'), /Uncertainty: Subtype uncertain/);
-  assert.match(ui.annotationText('medgemma'), /Evidence: f0:full, f1:full/);
+  assert.match(ui.annotationText(), /Uncertainty: Subtype uncertain/);
+  assert.match(ui.annotationText(), /Evidence: f0:full, f1:full/);
   assert.equal(ui.node('edit-enhancement').disabled, false);
 });

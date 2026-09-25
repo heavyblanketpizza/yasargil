@@ -167,8 +167,7 @@ The deterministic importer re-expresses selected source instrument labels and
 retains the exact evidence references. [Independent MedGemma annotation](MEDGEMMA_FRAME_ANNOTATION.md)
 authors new target descriptions and evidence-linked claims from selected source
 images, nearby observations, and optional detail crops. Its model input excludes
-original CSV rows and Qwen drafts. The separate Qwen full-video annotation
-provides a comparison baseline, not an input to MedGemma. Removed historical
+original CSV rows and Qwen's selection explanations. Removed historical
 review/enhancement workflows had different evidence exposure; their artifacts
 retain those original inputs.
 

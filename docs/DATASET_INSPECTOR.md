@@ -8,16 +8,16 @@ Run the local inspector from the repository:
 
 Open **http://127.0.0.1:8765**. Use `--port` to choose another local port and
 `--runs-root` to inspect a different output directory. The default is `outputs`.
-The inspector reads saved selections, independent MedGemma annotations, optional
-Qwen baseline annotations, and historical MedGemma reviews. It does not start inference. Refresh discovers newly saved work.
+The inspector reads saved selections and their independent MedGemma annotations.
+It does not start inference. Refresh discovers newly saved work.
 
 Links from another app or website may open the inspector home page. The server
 allows top-level navigation to that static page while retaining same-origin
 checks for dataset APIs, media, exports, and curation actions.
 
 The folder icon between **Refresh** and **Export review** opens the configured
-output directory in the system file manager (`outputs` by default). Selection,
-Qwen, and MedGemma JSONs retain absolute source-image paths, derived-image paths,
+output directory in the system file manager (`outputs` by default). Selection
+and MedGemma JSONs retain absolute source-image paths, derived-image paths,
 timestamps, and hashes. They reference the original files rather than embedding
 the source dataset; external originals require their drive to be connected.
 Human annotation edits live separately in `.inspector-curation`. Review notes
@@ -64,12 +64,9 @@ to the still view with an error; loading also has a bounded timeout.
 
 ## Read attached evidence
 
-Selected frames show **Independent MedGemma annotation** when a matching new run
-exists. This result attaches directly to its selection; no Qwen annotation is
-required. An independent result takes precedence over historical MedGemma review
-results for the same selection. A Qwen annotation block appears when a saved
-Qwen baseline exists. Original source frames and human review remain available
-when no model annotation has been saved.
+Selected frames show **Independent MedGemma annotation** when a matching run
+exists. This result attaches directly to its selection. Original source frames
+and human review remain available when no model annotation has been saved.
 
 The independent annotation separates **target-visible** claims from
 **context-supported** interpretations. Each claim shows its category, statement,
@@ -79,11 +76,9 @@ and nearby source observations; crop bounds identify the original pixels. Crops
 are views of one observation, not extra temporal observations. Evidence links
 resolve to the images actually supplied, not to a model's invented timestamp.
 
-Saved older outputs are marked **HISTORICAL REVIEW** and retain their original
-Qwen comparison, revisions, corrections, and deferred evidence fields. They are
-not relabeled as independent annotation. Missing or pending annotations are never
-filled with generated content. Exact request, response, annotation, and model
-artifacts are accessible from the frame's source data.
+Missing or pending annotations are never filled with generated content. Exact
+request, response, annotation, and model artifacts are accessible from the
+frame's source data.
 
 Model additions are labeled **AI-generated annotations**. Original dataset fields
 and human notes retain their separate origins. The interface uses Meslo when
@@ -93,20 +88,17 @@ Current MedGemma input contains source images, nearby observations, optional
 target crops, and documented procedure context. It excludes Qwen prose, source
 CSV labels, outcomes, and surgeon experience. Source labels and outcomes visible
 in this inspector are retrospective information for the human reviewer; they are
-not evidence that the current model received them. The separate Qwen baseline
-uses the complete video. Historical MedGemma review packets had different inputs,
-including Qwen drafts and matching source labels. See
-[independent annotation](MEDGEMMA_FRAME_ANNOTATION.md) and
-[historical review protocols](MEDGEMMA_FRAME_REVIEW.md).
+not evidence that the current model received them. See
+[independent annotation](MEDGEMMA_FRAME_ANNOTATION.md).
 
 ## Edit or remove an enhancement
 
-The pencil and trash icon buttons beside the annotation comparison apply to the
-current frame's enhanced record. The pencil opens a human editor for each available
-model annotation. Save a revision to show your edited text under
+The pencil and trash icon buttons beside the annotation apply to the current
+frame's enhanced record. The pencil opens a human editor for the MedGemma
+annotation. Save a revision to show your edited text under
 **Human-edited annotation**; expand **Original AI-generated annotation** to
-compare it with the model output and its evidence. Missing model results
-cannot be edited until they exist.
+compare it with the model output and its evidence. A frame cannot be edited
+until its model result exists.
 
 The trash icon deletes the frame's enhancement from the curated view. A restore
 icon brings it back, including prior human edits. The timeline marks this with
@@ -120,7 +112,7 @@ to an enhancement resets its previous Reviewed assessment while keeping notes.
 
 **Source data** contains original manual tool-tip rows (`sospine_tool_tips.csv`)
 and computed bounding-box rows (`sospine_bbox.csv`). These contain instrument
-labels and coordinates, separate from Qwen and MedGemma's generated prose.
+labels and coordinates, separate from MedGemma's generated prose.
 Preserving exact rows and CSV locators establishes their source, not their
 correctness. Source data also contains exact frame provenance and expandable
 complete records. Raw model responses and run artifacts
@@ -145,7 +137,7 @@ CSV values remain visible as metadata and never stretch or shorten playback.
 
 ## Keep human notes
 
-**Human review**, below the model comparison, offers three compact icon decisions:
+**Human review**, below the model annotation, offers three compact icon decisions:
 a clock for **Unfinished**, an alert for **Needs attention**, and a check for
 **Complete**. Choose a decision and
 optionally add a note, then click **Save review**. The saved review shows its

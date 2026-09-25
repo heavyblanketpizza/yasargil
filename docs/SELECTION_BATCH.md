@@ -16,7 +16,7 @@ The inspected release contains 24 sequences. Obtain a separate copy as described
 in [Data sources](DATA_SOURCES.md). Complete input coverage means
 every released image in each sequence, not verified coverage of an entire
 original repair. The batch performs selection; the separate
-[annotation pass](FRAME_ANNOTATION.md) can subsequently consume a completed
+[annotation pass](MEDGEMMA_FRAME_ANNOTATION.md) can subsequently consume a completed
 selection.
 
 ## Ordering the queue

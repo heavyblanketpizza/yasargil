@@ -10,6 +10,6 @@ They may be inspected as historical records; they are not resumed, rewritten, or
 relabeled as independent annotations. Those requests included Qwen drafts and,
 when available, original source labels. New annotations do not inherit that text.
 
-The [dataset inspector](DATASET_INSPECTOR.md) preserves historical display support.
+The [dataset inspector](DATASET_INSPECTOR.md) no longer displays them.
 Model completion and model agreement do not establish clinical correctness or
 training eligibility.

@@ -11,10 +11,10 @@ tool-label/coordinate CSV rows. New descriptive annotations are written in the
 subsequent annotation pass. For why the project moved from Ollama to llama.cpp
 and runtime compatibility requirements, see [runtime migration](LLAMA_CPP.md#migration-from-ollama).
 
-After a completed selection, [frame annotation](FRAME_ANNOTATION.md) freezes the
-final stills and starts a fresh Qwen session with the complete video. It separates
-directly visible observations from contextual claims with source-time evidence,
-preserving uncertainty and human-review requirements.
+After a completed selection, [MedGemma annotation](MEDGEMMA_FRAME_ANNOTATION.md)
+freezes the final stills and annotates each one from source images. It separates
+directly visible claims from context-supported interpretations, preserving
+uncertainty and human-review requirements.
 
 To process every available SOSpine sequence in alternating outcome order, use
 the [selection batch](SELECTION_BATCH.md). Each sequence receives an independent

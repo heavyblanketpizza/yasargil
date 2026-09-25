@@ -3,7 +3,7 @@
 **Updated 2026-09-22. Status: independent annotation and review/export foundations
 are implemented; expert assessment and comparative experiments remain outstanding.**
 The active [MedGemma annotation](MEDGEMMA_FRAME_ANNOTATION.md) receives source images
-without Qwen drafts or original CSV labels. Historical archives remain verifiable;
+without original CSV labels. Historical archives remain verifiable;
 Qwen-conditioned review/enhancement runtimes have been removed. The procedures
 below are proposed evaluations, not completed studies. Model agreement,
 schema-valid responses, and successful serialization do not establish quality.
@@ -48,13 +48,11 @@ context only. Record this exposure difference when comparing results. Computed
 boxes are not verified manual geometry. Original and artifact locations resolve
 under separate roots; `artifact:` identifies the latter.
 
-The separate [Qwen full-video baseline](FRAME_ANNOTATION.md) receives complete
-video and selected stills without original CSV labels. [Independent MedGemma
-annotation](MEDGEMMA_FRAME_ANNOTATION.md) uses target-centered source-image packets
-without seeing Qwen drafts. Both produce separate proposals; neither by itself
-satisfies the v2 reviewed-export gates described here.
+[Independent MedGemma annotation](MEDGEMMA_FRAME_ANNOTATION.md) uses
+target-centered source-image packets. Its output is a proposal; by itself it does
+not satisfy the v2 reviewed-export gates described here.
 
-New inference code for both workflows now uses llama.cpp. See [Migration from Ollama](LLAMA_CPP.md#migration-from-ollama) for runtime setup and compatibility requirements. Preserve historical Ollama artifacts and their runtime provenance; the read-only verifier does not convert them. New llama.cpp runs require new output directories, and a backend change alone establishes neither better annotation quality nor reviewed training eligibility.
+New inference code for selection and annotation now uses llama.cpp. See [Migration from Ollama](LLAMA_CPP.md#migration-from-ollama) for runtime setup and compatibility requirements. Preserve historical Ollama artifacts and their runtime provenance; the read-only verifier does not convert them. New llama.cpp runs require new output directories, and a backend change alone establishes neither better annotation quality nor reviewed training eligibility.
 
 ## Review rubric
 

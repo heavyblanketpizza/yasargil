@@ -52,11 +52,7 @@
             <div id="enhancement-deleted" class="deleted-banner" role="status" hidden><strong>Enhancement deleted</strong></div>
             <div id="selection-context"></div>
             <div id="enhancement-models">
-              <article class="annotation-block" id="qwen-block">
-                <div class="model-heading" title="Archived full-video annotation"><span class="model-mark" aria-hidden="true">Q</span><div><h3>Historical video annotation</h3><p class="model-identity">Qwen · Archived annotation</p></div></div>
-                <div id="qwen-content"></div>
-              </article>
-              <article class="annotation-block medgemma-block" id="medgemma-block">
+              <article class="annotation-block" id="medgemma-block">
                 <div class="model-heading" title="Model specialized for medical text and images"><span class="model-mark inverse" aria-hidden="true">M</span><div><h3>Domain-specialist annotation</h3><p class="model-identity">MedGemma · Surgical annotation</p></div></div>
                 <span id="medgemma-state" class="review-assessment eyebrow"></span><div id="medgemma-content"></div>
               </article>
@@ -92,7 +88,6 @@
     <form id="enhancement-form">
       <div class="dialog-heading"><div><span class="eyebrow">HUMAN ANNOTATION</span><h2 id="editor-title">Edit enhanced record</h2></div><button type="button" class="button action-icon" id="editor-close" title="Close editor" aria-label="Close annotation editor"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button></div>
       <p id="editor-frame" class="mono"></p>
-      <div id="edit-qwen-field"><label class="note-label" for="edit-qwen">Video-native model (Qwen) · human revision</label><textarea id="edit-qwen" rows="7" maxlength="100000"></textarea></div>
       <div id="edit-medgemma-field"><label class="note-label" for="edit-medgemma">Domain-specialist model (MedGemma) · human revision</label><textarea id="edit-medgemma" rows="7" maxlength="100000"></textarea></div>
       <p id="editor-error" class="error-banner" role="alert" hidden></p>
       <div class="dialog-footer"><button type="button" class="button" id="editor-cancel">Cancel</button><button type="submit" class="button button-black" id="editor-save">Save revision</button></div>

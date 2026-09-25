@@ -58,9 +58,8 @@ The baseline records `explicit_indices`. Historical enhancement archives record
 initial samples and model-requested evidence intervals. Those runtimes have been
 removed, while their selection history remains unchanged. Current
 [complete-video selection](SMART_FRAME_SELECTION.md) feeds
-[independent MedGemma annotation](MEDGEMMA_FRAME_ANNOTATION.md). Its output and
-the separate [Qwen baseline](FRAME_ANNOTATION.md) are draft artifacts outside this
-v2 archive/export adapter. Preserve an independent random evaluation sample so
+[independent MedGemma annotation](MEDGEMMA_FRAME_ANNOTATION.md). Its output is a
+draft artifact outside this v2 archive/export adapter. Preserve an independent random evaluation sample so
 selected difficult cases do not masquerade as the natural distribution.
 
 Retrospective selection is legitimate for an offline archive when labeled accordingly. A claim that selection represents an online process additionally requires that the selector used only information available at the cutoff. Choosing an earlier frame because the final repair failed is outcome-informed selection, even when the resulting answer cites only that earlier frame.
@@ -74,9 +73,8 @@ The historical llama.cpp enhancement transport used ordered image data URLs thro
 New inference uses llama.cpp; the [migration notes](LLAMA_CPP.md#migration-from-ollama)
 explain setup and historical provenance. Independent MedGemma annotation reads
 a completed selection and original images, nearby source observations, optional
-detail crops, and documented procedure context. It does not receive Qwen drafts
-or original CSV labels. Qwen full-video annotations remain a separate baseline.
-Historical Ollama and removed review/enhancement runs cannot resume as the new
+detail crops, and documented procedure context. It does not receive original
+CSV labels. Historical Ollama and removed review/enhancement runs cannot resume as the new
 annotation protocol; use a new output directory.
 
 Historical bounded enhancement calls shared the original start/cutoff window. Parent-run exposure participates in causal checks; later review cannot erase information available in an ancestor. Final event/question proposals and historical stage claims remain pending. Teacher agreement does not create a human review event. The historical conversation projection uses the final response with `all_assistant_turns`; it does not export the full model deliberation loop as a reasoning trace.

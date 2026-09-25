@@ -119,6 +119,21 @@ class AnnotationEvidenceTests(unittest.TestCase):
         with self.assertRaisesRegex(ContractError, "hash mismatch"):
             self.packet()
 
+    def test_invalid_source_manifest_is_rejected(self):
+        cases = [None, {}, {**self.source, "frames": []}, {**self.source, "expected_video_frames": 6},
+                 {**self.source, "duration_ms": float("nan")}, {**self.source, "source_sha256": "invalid"}]
+        for field, value in (("frame_id", "f0"), ("frame_index", 0), ("timestamp_ms", 0),
+                             ("timestamp_ms", float("inf")), ("timestamp_ms", 7001),
+                             ("source_sha256", "bad"), ("image_path", "relative.png"),
+                             ("source_pts", 16000), ("timestamp_basis", "guessed"), ("timestamp_basis", [])):
+            source = copy.deepcopy(self.source)
+            source["frames"][1][field] = value
+            cases.append(source)
+        for source in cases:
+            with self.subTest(source=str(source)[:100]), self.assertRaises(ContractError):
+                build_evidence(source, "f3", self.output)
+        self.assertFalse(self.output.exists())
+
     def test_invalid_targets_options_and_timeline_fail(self):
         for options in ({"before_frames": -1}, {"before_frames": True}, {"after_frames": 9},
                         {"after_frames": 1.5}, {"detail_crops": 1}, {"procedure_context": {}},

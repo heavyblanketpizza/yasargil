@@ -1,14 +1,9 @@
 # Independent annotation of selected surgical frames
 
 MedGemma authors an annotation for each selected frame from source images.
-The input is a completed `select-video-frames` run. No Qwen annotation pass is
-required. Qwen selection explanations, Qwen drafts, source CSV labels, outcomes,
-and surgeon-experience fields are excluded from the annotation request.
-
-Qwen retains its video-selection role. A separate Qwen full-video annotation
-can be generated for comparison, but MedGemma never receives that draft. The
-former Qwen-conditioned review and bounded enhancement runners have been removed;
-[historical review artifacts](MEDGEMMA_FRAME_REVIEW.md) remain readable.
+The input is a completed `select-video-frames` run. Qwen selection explanations,
+source CSV labels, outcomes, and surgeon-experience fields are excluded from the
+annotation request. Qwen's role is limited to video frame selection.
 
 ## Evidence supplied to each annotation
 
@@ -78,20 +73,6 @@ later targets stop. Resume verifies frozen inputs and saved receipts before
 reusing accepted work. An interrupted, unfinished inference call may need to
 run again. Exact requests, raw responses, model/runtime identities, evidence
 packets, and per-target annotations are retained for inspection.
-
-The scoped first-two-case runner consumes selection results directly:
-
-```sh
-uv run python -m yasargil.medgemma_pair \
-  --selection-batch outputs/selection-batch-example \
-  --output-dir outputs/medgemma-pair-example --prepare-only
-
-uv run python -m yasargil.medgemma_pair \
-  --output-dir outputs/medgemma-pair-example --resume
-```
-
-It processes S2A2 and S1A2 only. It does not wait for or import a Qwen annotation
-run. Historical MedGemma pair directories cannot be resumed into this protocol.
 
 ## What the annotation should capture
 
