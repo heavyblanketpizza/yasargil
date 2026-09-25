@@ -1,3 +1,3 @@
-"""Surgical dataset enhancement contracts and local research utilities."""
+"""Surgical video frame selection, MedGemma annotation, and training-export utilities."""
 
-__version__ = "2.1.0"
+__version__ = "0.1.0"

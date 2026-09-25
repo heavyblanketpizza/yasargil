@@ -279,7 +279,7 @@ class AnnotationTests(unittest.TestCase):
     def test_legacy_review_plan_rejected_without_inference(self):
         self.output.mkdir()
         write(self.output / 'run.json', {'schema_version': 'medgemma-surgery-review-v1'})
-        with self.assertRaisesRegex(ContractError, 'Historical Qwen-review'):
+        with self.assertRaisesRegex(ContractError, 'Expected an independent MedGemma annotation run'):
             self.run_pass(resume=True)
 
     def test_context_budget_failure_is_not_accepted(self):

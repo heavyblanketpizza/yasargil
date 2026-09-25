@@ -302,7 +302,7 @@ def run_annotation(selection_run, output_dir, config=None, *, resume=False, prep
     with directory_lock(output):
         plan = _read(output / "run.json")
         require(plan.get("schema_version") == PROTOCOL_VERSION and plan.get("runtime") == "llama.cpp",
-                "Historical Qwen-review runs cannot resume; start a new independent annotation")
+                "Expected an independent MedGemma annotation run")
         require(_read(output / "session.json")["run_sha256"] == sha256_file(output / "run.json"), "Frozen plan changed")
         require(plan["protocol_sha256"] == _protocol_hash(), "Annotation protocol changed; start a new run")
         if selection_run is not None:
