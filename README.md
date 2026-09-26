@@ -99,6 +99,7 @@ and the [annotation evaluation plan](docs/MEDGEMMA_FRAME_ANNOTATION.md#evaluate-
 - [Selection batches](docs/SELECTION_BATCH.md) and [gap experiments](docs/GAP_EXPERIMENT.md)
 - [Dataset format and export rules](docs/DATASET_CONTRACT.md)
 - [Human review and evaluation](docs/REVIEW_AND_EVALUATION.md)
+- [Deferred TODO: Qwen penalties and timestamp accuracy](docs/QWEN_PENALTY_TIMESTAMP_TODO.md)
 - [Training with Unsloth](docs/TRAINING.md)
 
 ## Development

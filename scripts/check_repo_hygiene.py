@@ -28,6 +28,7 @@ PUBLIC_MARKDOWN = {
     "docs/HOW_QWEN_UNDERSTANDS_VIDEO.md",
     "docs/LLAMA_CPP.md",
     "docs/MEDGEMMA_FRAME_ANNOTATION.md",
+    "docs/QWEN_PENALTY_TIMESTAMP_TODO.md",
     "docs/REVIEW_AND_EVALUATION.md",
     "docs/SELECTION_BATCH.md",
     "docs/SMART_FRAME_SELECTION.md",
