@@ -5,12 +5,56 @@ The active training interface is `yasargil.training.build_sft_trainer`. It accep
 The interface is independent of the enhancement record schema. The enhancement archive contains source facts, model proposals, review history, and provenance. Its training export contains ordinary ordered `messages` with typed text/image blocks and serialized assistant targets. The contract/export layer owns schema validation, review eligibility, media hashes, partition separation and image hydration. The trainer receives only that validated training view.
 
 [Independent MedGemma annotation](MEDGEMMA_FRAME_ANNOTATION.md) produces pending
-per-frame proposals, separate from the v2 training-export adapter. Historical
-enhancement archives remain verifiable. Model-generated inspection claims and
-turns require actual human surgeon or clinical-domain-expert review, including
-clinical appropriateness, before training eligibility. Completed-review ingestion
-and an export adapter for the new independent annotation records remain pending;
-no command converts inference completion or a blank worksheet into approval.
+per-frame proposals. Model-generated claims require actual human surgeon or
+clinical-domain-expert review, including clinical appropriateness, before training
+eligibility. [Reviewed annotation export](#export-reviewed-annotations) converts
+only frames a reviewer marked **Complete**; inference completion or a blank
+worksheet never becomes approval. Historical enhancement archives remain
+verifiable through the v2 archive export.
+
+## Export reviewed annotations
+
+Review a record in the [dataset inspector](DATASET_INSPECTOR.md), mark each
+acceptable frame **Complete**, and use **Export review** to save the worksheet.
+Then export one partition:
+
+```sh
+uv run yasargil export-reviewed-annotations \
+  --review /path/to/S1A1-human-review.json \
+  --runs-root outputs --partition train \
+  --reviewer "Reviewer Name" --reviewer-role surgeon \
+  --output outputs/exports/release-1/train.jsonl
+```
+
+A frame becomes a row only when its saved decision is **Complete**, the decision
+covers its current human edit, the enhancement is not deleted, and the worksheet's
+revision identity matches the current selection, annotation, outcome and label
+data. Pass the same `--dataset-root` the inspector used, if any. The target is the
+human-edited text when one exists; otherwise it is the model annotation rendered
+exactly as the inspector's editor presents it. The user turn contains every image
+view MedGemma received, labeled by view ID.
+
+The receipt records the declared reviewer and role, the worksheet hashes, and
+the annotation run. It does not authenticate the reviewer. Each case may appear
+once per release directory, and a surgeon or image cannot appear in two
+partitions of the same release. Neighboring views include later frames, so these
+rows are `retrospective_surgical_review` data with `final_assistant_turn` loss:
+
+```python
+from yasargil.contract import load_export
+
+train_rows = load_export(
+    "outputs/exports/release-1/train.jsonl",
+    dataset_root,
+    artifact_root="outputs",
+    expected_partition="train",
+    expected_loss_scope="final_assistant_turn",
+    expected_intended_use="retrospective_surgical_review",
+)
+```
+
+Images are referenced relative to the runs root, so keep that directory intact
+between export and training.
 
 ## Prepare the training environment
 

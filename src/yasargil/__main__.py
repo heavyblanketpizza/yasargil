@@ -47,6 +47,8 @@ def main(argv=None):
     add_annotation_parser(sub)
     from .dataset_inspector import add_inspector_parser
     add_inspector_parser(sub)
+    from .annotation_export import add_export_parser
+    add_export_parser(sub)
     imp = sub.add_parser("import-sospine", help="Import a bounded source-derived draft, without inference")
     imp.add_argument("--dataset-root", type=Path, required=True)
     imp.add_argument("--case-id", required=True)
@@ -87,6 +89,10 @@ def main(argv=None):
         if args.command == "inspect-dataset":
             from .dataset_inspector import inspector_cli
             inspector_cli(args)
+            return
+        if args.command == "export-reviewed-annotations":
+            from .annotation_export import export_cli
+            export_cli(args)
             return
         if args.command == "annotate-selected-frames":
             from .medgemma_annotation import annotation_cli

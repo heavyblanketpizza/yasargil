@@ -158,8 +158,9 @@ so notes stay attached to one frame.
 **Export review** downloads a JSON draft worksheet with the record, revision
 identity, per-frame notes, enhancement edits/deletions, and source references.
 Deleted enhancements are explicitly marked `included: false`. Export notes before clearing
-browser storage or switching browsers. This worksheet does not replace the
-existing formal review or training-export gates.
+browser storage or switching browsers. The worksheet itself remains a draft;
+[reviewed annotation export](TRAINING.md#export-reviewed-annotations) turns only
+its **Complete** frames into training rows.
 
 ## Local operation
 

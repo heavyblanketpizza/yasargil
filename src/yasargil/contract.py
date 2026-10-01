@@ -17,6 +17,7 @@ from pathlib import Path
 from jsonschema import Draft202012Validator, FormatChecker
 
 VERSION = "2.0.0"
+ANNOTATION_EXPORT_VERSION = "yasargil-annotation-export-v1"
 SCHEMA_PATH = Path(__file__).resolve().parents[2] / "schemas/enhancement-record.schema.json"
 if not SCHEMA_PATH.is_file():
     SCHEMA_PATH = Path(sysconfig.get_path("data")) / "share/yasargil/schemas/enhancement-record.schema.json"
@@ -592,16 +593,20 @@ def load_export(path, dataset_root, *, artifact_root=None, allow_preview=False,
     """Verify receipts, then eagerly load a bounded experiment's images into memory."""
     path = Path(path)
     receipt = json.loads(path.with_suffix(".receipt.json").read_text())
-    required = {"schema_version", "purpose", "row_count", "partition", "loss_scope", "intended_use",
-                "schema_sha256", "output_sha256", "records", "media"}
+    common = {"schema_version", "purpose", "row_count", "partition", "loss_scope", "intended_use",
+              "output_sha256", "records", "media"}
+    # Archive exports bind to the record schema; annotation exports bind to their review.
+    annotation_export = receipt.get("schema_version") == ANNOTATION_EXPORT_VERSION
+    required = common | ({"review"} if annotation_export else {"schema_sha256"})
     require(set(receipt) == required, "Malformed export receipt fields")
-    require(receipt["schema_version"] == VERSION, "Wrong receipt version")
+    require(annotation_export or receipt["schema_version"] == VERSION, "Wrong receipt version")
     require(receipt["purpose"] in {"format_preview_only", "reviewed_sft_export"}, "Unknown export purpose")
     require(receipt["purpose"] == "reviewed_sft_export" or allow_preview, "Draft preview is not reviewed training data")
     require(receipt["partition"] == expected_partition, "Requested partition differs from receipt")
     require(receipt["loss_scope"] == expected_loss_scope, "Requested loss policy differs from receipt")
     require(receipt["intended_use"] == expected_intended_use, "Requested temporal use differs from receipt")
-    require(receipt["schema_sha256"] == sha256_file(SCHEMA_PATH), "Schema digest mismatch")
+    if not annotation_export:
+        require(receipt["schema_sha256"] == sha256_file(SCHEMA_PATH), "Schema digest mismatch")
     require(receipt["output_sha256"] == sha256_file(path), "Export digest mismatch")
     rows = read_records(path)
     require(len(rows) == receipt["row_count"] == len(receipt["records"]) and rows, "Receipt row count mismatch")

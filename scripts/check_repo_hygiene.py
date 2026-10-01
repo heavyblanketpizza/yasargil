@@ -26,6 +26,7 @@ PUBLIC_MARKDOWN = {
     "docs/DATA_SOURCES.md",
     "docs/GAP_EXPERIMENT.md",
     "docs/HOW_QWEN_UNDERSTANDS_VIDEO.md",
+    "docs/LIVE_GUIDANCE.md",
     "docs/LLAMA_CPP.md",
     "docs/MEDGEMMA_FRAME_ANNOTATION.md",
     "docs/QWEN_PENALTY_TIMESTAMP_TODO.md",

@@ -86,9 +86,10 @@ for review notes and exports.
   structured output, and medical pretraining do not establish accuracy.
 - SOSpine provides sampled images; reconstructed video timing does not recover
   original acquisition timestamps or missing motion.
-- Completing a run does not approve its output for training. Human review,
-  eligibility checks, and surgeon-disjoint splits are required. Importing completed
-  reviews, expert evaluation, and student GPU training remain pending.
+- Completing a run does not approve its output for training. Only frames a
+  reviewer marks Complete can be [exported](docs/TRAINING.md#export-reviewed-annotations),
+  with surgeon-disjoint partitions. Expert evaluation and student GPU training
+  remain pending.
 
 See [video validation limits](docs/LLAMA_CPP.md#integrity-and-validation-limits)
 and the [annotation evaluation plan](docs/MEDGEMMA_FRAME_ANNOTATION.md#evaluate-annotation-value).
