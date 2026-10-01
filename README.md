@@ -79,6 +79,39 @@ Open [localhost:8765](http://127.0.0.1:8765) to browse frames, model annotations
 source labels, and outcomes. See the [inspector guide](docs/DATASET_INSPECTOR.md)
 for review notes and exports.
 
+## Replay live guidance
+
+Play a recorded case as if it were live. The agent answers questions about it.
+
+1. Check your setup (no model, takes seconds):
+
+   ```bash
+   uv run python -m yasargil.live replay \
+     --dataset-root /path/to/datasets/SOSpine \
+     --case S1A1 \
+     --output-dir outputs/live/S1A1-check \
+     --speed 0
+   ```
+
+2. Run it with the Qwen agent and 10 questions (needs setup step 2):
+
+   ```bash
+   uv run python -m yasargil.live replay \
+     --dataset-root /path/to/datasets/SOSpine \
+     --case S1A1 \
+     --output-dir outputs/live/S1A1-agent \
+     --speed 0 --agent --auto-questions 10
+   ```
+
+3. Open the result:
+
+   ```bash
+   open outputs/live/S1A1-agent/report.html
+   ```
+
+Use a new `--output-dir` for every run. See the [live guidance guide](docs/LIVE_GUIDANCE.md)
+for evaluation, perception options, and the DINO probe.
+
 ## Research status and known limitations
 
 - Generated timestamps can be wrong, and full-video requests are expensive.
@@ -96,6 +129,7 @@ and the [annotation evaluation plan](docs/MEDGEMMA_FRAME_ANNOTATION.md#evaluate-
 
 ## More guides
 
+- [Live guidance replay](docs/LIVE_GUIDANCE.md)
 - [How Qwen3.8-27B understands video](docs/HOW_QWEN_UNDERSTANDS_VIDEO.md)
 - [Selection batches](docs/SELECTION_BATCH.md) and [gap experiments](docs/GAP_EXPERIMENT.md)
 - [Dataset format and export rules](docs/DATASET_CONTRACT.md)
