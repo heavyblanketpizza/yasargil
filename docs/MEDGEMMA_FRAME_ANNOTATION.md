@@ -60,6 +60,11 @@ there is no silent target dropping. Use `--before-frames 0 --after-frames 0
 --no-detail-crops` for a target-only comparison. `--procedure-context` can supply
 verified background; when omitted, the saved selection context is inherited.
 
+If the source images moved since selection (for example, a different disk or a
+fresh download), pass `--source-dir /path/to/datasets/SOSpine/frames/<case>` when
+preparing. Every image must still match the hash recorded at selection, and
+`run.json` records the old and new directories. Resume needs no extra option.
+
 ```sh
 uv run yasargil medgemma-annotation-status \
   --output-dir outputs/medgemma-annotation-example

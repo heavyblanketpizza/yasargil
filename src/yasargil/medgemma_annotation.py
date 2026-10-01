@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import base64
+import copy
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
 import fcntl
@@ -81,7 +82,28 @@ def _protocol_hash():
         "request_layout": "target_views_then_ordered_context_then_allowlisted_metadata_v1"})
 
 
-def _prepare(selection_run, output, config):
+def _source_dir(source):
+    path = Path(source["source_path"])
+    return path if source["source_kind"] == "released_image_sequence" else path.parent
+
+
+def relocate_source(source, source_dir):
+    """Point source media paths at a copy in another directory; recorded hashes still verify every byte."""
+    old, new = _source_dir(source), Path(source_dir).expanduser().resolve()
+    require(new.is_dir(), f"Source directory not found: {new}")
+
+    def move(path):
+        require(Path(path).parent == old, "Relocation needs all source media in one directory")
+        return str(new / Path(path).name)
+
+    moved = copy.deepcopy(source)
+    moved["source_path"] = str(new) if source["source_kind"] == "released_image_sequence" else move(source["source_path"])
+    for frame in moved["frames"]:
+        frame["source_path"] = move(frame["source_path"])
+    return moved, {"from": str(old), "to": str(new)}
+
+
+def _prepare(selection_run, output, config, source_dir=None):
     require(selection_run is not None, "--selection-run is required for a new MedGemma annotation")
     parent = Path(selection_run).expanduser().resolve()
     require(parent.is_dir() and not output.exists() and not output.is_relative_to(parent),
@@ -94,6 +116,9 @@ def _prepare(selection_run, output, config):
         except BlockingIOError as exc:
             raise ContractError("Selection is still active") from exc
         selection_plan, source, selected, last_round = validate_completed_selection(parent, parent)
+        relocation = None
+        if source_dir is not None:
+            source, relocation = relocate_source(source, source_dir)
         source_root = Path(source["source_path"]).resolve()
         if source["source_kind"] == "original_video":
             source_root = source_root.parent
@@ -143,6 +168,8 @@ def _prepare(selection_run, output, config):
                 "source_frame_count": len(source["frames"]),
                 "qwen_annotations_included": False, "source_labels_included": False,
                 "human_review_required": True, "training_eligible": False}
+        if relocation:
+            plan["source_relocation"] = relocation
         plan_bytes = (json.dumps(plan, ensure_ascii=False, indent=2, allow_nan=False) + "\n").encode("utf-8")
         atomic_json(output / "session.json", {"run_sha256": hashlib.sha256(plan_bytes).hexdigest()})
         # The run is resumable only after every preparation artifact is durable.
@@ -292,12 +319,13 @@ def _publish(output, plan, rows, status, error=None):
 
 
 def run_annotation(selection_run, output_dir, config=None, *, resume=False, prepare_only=False,
-                   client=None, should_stop=lambda: False, progress=print):
+                   client=None, should_stop=lambda: False, progress=print, source_dir=None):
     output = Path(output_dir).expanduser()
     require(not output.is_symlink(), "Annotation output cannot be symlinked")
     output = output.resolve()
+    require(not (resume and source_dir), "--source-dir applies only when preparing a new run")
     if not resume:
-        _prepare(selection_run, output, config)
+        _prepare(selection_run, output, config, source_dir)
     require((output / "run.json").is_file(), "No prepared independent MedGemma annotation found")
     with directory_lock(output):
         plan = _read(output / "run.json")
@@ -380,6 +408,8 @@ def request_annotation_pause(output_dir):
 def add_annotation_parser(subparsers):
     parser = subparsers.add_parser("annotate-selected-frames", help="Independent MedGemma surgical annotation from selected source frames")
     parser.add_argument("--selection-run", type=Path)
+    parser.add_argument("--source-dir", type=Path,
+                        help="Directory now holding the selection's source images, if they moved")
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--prepare-only", action="store_true")
@@ -405,5 +435,5 @@ def annotation_cli(args, *, should_stop=lambda: False):
         config = AnnotationConfig(**overrides)
     result = run_annotation(args.selection_run, args.output_dir, config, resume=args.resume,
         prepare_only=args.prepare_only, client=LlamaCppClient(args.project_root, timeout=args.timeout),
-        should_stop=should_stop, progress=lambda message: print(message, flush=True))
+        should_stop=should_stop, progress=lambda message: print(message, flush=True), source_dir=args.source_dir)
     print(json.dumps(result, indent=2))

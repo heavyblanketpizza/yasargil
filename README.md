@@ -88,8 +88,8 @@ Play a recorded case as if it were live. The agent answers questions about it.
    ```bash
    uv run python -m yasargil.live replay \
      --dataset-root /path/to/datasets/SOSpine \
-     --case S1A1 \
-     --output-dir outputs/live/S1A1-check \
+     --case S2A2 \
+     --output-dir outputs/live/S2A2-check \
      --speed 0
    ```
 
@@ -98,15 +98,15 @@ Play a recorded case as if it were live. The agent answers questions about it.
    ```bash
    uv run python -m yasargil.live replay \
      --dataset-root /path/to/datasets/SOSpine \
-     --case S1A1 \
-     --output-dir outputs/live/S1A1-agent \
+     --case S2A2 \
+     --output-dir outputs/live/S2A2-agent \
      --speed 0 --agent --auto-questions 10
    ```
 
 3. Open the result:
 
    ```bash
-   open outputs/live/S1A1-agent/report.html
+   open outputs/live/S2A2-agent/report.html
    ```
 
 Use a new `--output-dir` for every run. See the [live guidance guide](docs/LIVE_GUIDANCE.md)

@@ -59,6 +59,13 @@ class MedGemmaCommandTests(unittest.TestCase):
             self.assertEqual(rejected.exception.code, 2)
             run.assert_not_called()
 
+    def test_source_dir_reaches_preparation(self):
+        with patch("yasargil.medgemma_annotation.run_annotation", return_value={"status": "prepared"}) as run, \
+                patch("yasargil.medgemma_annotation.LlamaCppClient"), redirect_stdout(io.StringIO()):
+            main(["annotate-selected-frames", "--selection-run", "/fixture/selection",
+                  "--output-dir", "/fixture/annotation", "--prepare-only", "--source-dir", "/fixture/frames/S1A1"])
+        self.assertEqual(run.call_args.kwargs["source_dir"], Path("/fixture/frames/S1A1"))
+
     def test_target_only_baseline_can_disable_neighbors_and_crops(self):
         with patch("yasargil.medgemma_annotation.run_annotation", return_value={"status": "prepared"}) as run, \
                 patch("yasargil.medgemma_annotation.LlamaCppClient"), redirect_stdout(io.StringIO()):

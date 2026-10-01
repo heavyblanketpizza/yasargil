@@ -289,6 +289,34 @@ class AnnotationTests(unittest.TestCase):
         with self.assertRaisesRegex(ContractError, 'answer capacity'):
             self.run_pass(FakeClient(overflow))
 
+    def test_relocated_source_dir_annotates_from_verified_copy(self):
+        copy_dir = self.root / 'copy/frames/S1A1'
+        shutil.move(self.release, copy_dir)
+        with self.assertRaisesRegex(ContractError, 'Evidence changed or is missing'):
+            self.run_pass(prepare_only=True)
+        self.assertEqual(self.run_pass(prepare_only=True, source_dir=copy_dir)['status'], 'prepared')
+        self.assertEqual(read(self.output / 'source.json'), self.source)
+        self.assertEqual(read(self.output / 'run.json')['source_relocation'],
+                         {'from': str(self.release), 'to': str(copy_dir)})
+        for frame in read(self.output / 'evidence/frame-0000.json')['frames']:
+            self.assertEqual(Path(frame['source_path']).parent, copy_dir)
+        client = FakeClient()
+        self.assertEqual(self.run_pass(client, resume=True)['status'], 'completed')
+        self.assertEqual(len(client.requests), 2)
+
+    def test_relocated_source_dir_must_hold_identical_bytes(self):
+        copy_dir = self.root / 'copy/frames/S1A1'
+        shutil.copytree(self.release, copy_dir)
+        Image.new('RGB', (48, 32), 'white').save(copy_dir / 'S1A1_frame_00000002.jpeg')
+        with self.assertRaisesRegex(ContractError, 'Evidence changed or is missing'):
+            self.run_pass(prepare_only=True, source_dir=copy_dir)
+        self.assertFalse(self.output.exists())
+
+    def test_source_dir_applies_only_when_preparing(self):
+        self.run_pass(prepare_only=True)
+        with self.assertRaisesRegex(ContractError, 'only when preparing'):
+            self.run_pass(resume=True, source_dir=self.release)
+
     def test_zero_context_no_crops_ablation(self):
         self.config = replace(self.config, before_frames=0, after_frames=0, detail_crops=False)
         client = FakeClient()

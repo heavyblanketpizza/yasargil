@@ -68,16 +68,16 @@ Label perception, no agent, as fast as possible:
 
 ```bash
 uv run python -m yasargil.live replay \
-  --dataset-root /path/to/datasets/SOSpine --case S1A1 \
-  --output-dir outputs/live/S1A1-labels --speed 0
+  --dataset-root /path/to/datasets/SOSpine --case S2A2 \
+  --output-dir outputs/live/S2A2-labels --speed 0
 ```
 
 With the agent answering ten generated questions at real-time speed:
 
 ```bash
 uv run python -m yasargil.live replay \
-  --dataset-root /path/to/datasets/SOSpine --case S1A1 \
-  --output-dir outputs/live/S1A1-agent --agent --auto-questions 10
+  --dataset-root /path/to/datasets/SOSpine --case S2A2 \
+  --output-dir outputs/live/S2A2-agent --agent --auto-questions 10
 ```
 
 | Option | Meaning |
@@ -113,12 +113,12 @@ Open `report.html` in a browser to scrub through frames with perception
 overlays, timeline lanes, the spoken feed (optionally with suppressed
 messages), each question with its verified and rejected claims and agent steps,
 and the full event log. Regenerate it with
-`uv run python -m yasargil.live report --run outputs/live/S1A1-agent`.
+`uv run python -m yasargil.live report --run outputs/live/S2A2-agent`.
 
 ## Ask about a finished run
 
 ```bash
-uv run python -m yasargil.live ask --run outputs/live/S1A1-labels --at-s 240 \
+uv run python -m yasargil.live ask --run outputs/live/S2A2-labels --at-s 240 \
   --agent "Has the needle left the view since the first suture pass?"
 ```
 
