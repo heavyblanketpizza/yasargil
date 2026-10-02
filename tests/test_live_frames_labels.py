@@ -6,7 +6,7 @@ import unittest
 from live_fixtures import box, make_case, tip
 from yasargil.live import LiveError
 from yasargil.live.frames import FrameSource, case_frames, render_jpeg
-from yasargil.live.labels import CaseLabels, normalize_label
+from yasargil.live.labels import BOXES, POINTS, CaseLabels, LabelGeometry, normalize_label
 
 
 class FrameSourceTests(unittest.TestCase):
@@ -76,8 +76,14 @@ class LabelTests(unittest.TestCase):
         grasper, durotomy = sorted(labels.items(1), key=lambda item: item.label)[1], sorted(labels.items(1), key=lambda item: item.label)[0]
         self.assertEqual(grasper.point, (0.5, 0.5))
         self.assertIsNone(grasper.box)
+        self.assertEqual(grasper.source_table, POINTS)
         self.assertEqual(durotomy.box, (0.0, 0.25, 1.0, 0.75))
         self.assertEqual(durotomy.kind, "anatomy")
+        self.assertEqual(durotomy.source_table, BOXES)
+
+    def test_constructed_geometry_can_omit_source_provenance(self):
+        geometry = LabelGeometry("grasper", "instrument", "tip", (0.5, 0.5), None)
+        self.assertEqual(geometry.source_table, "")
 
     def test_empty_label_rows_mark_annotated_frames_without_items(self):
         make_case(self.root, "S1A1", {1: [], 2: [tip("grasper", 1, 1)]}, frame_count=3, unlabeled={3})

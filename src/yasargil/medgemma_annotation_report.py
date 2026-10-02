@@ -90,9 +90,23 @@ def _claims(annotation, packet):
     return ''.join(sections)
 
 
-def _card(packet, record, root):
+def _failure(failure, root):
+    attempts = _rows(failure.get("attempts"))
+    items = ''.join(
+        f'<article class="claim"><span class="badge">{_escape(attempt.get("decoding_stage", "unknown"))}</span>'
+        f'<p>{_escape(attempt.get("error", ""))}</p><p>'
+        + ' · '.join(_link(root / attempt["call_directory"] / name, label)
+                     for name, label in (("request.json", "Exact request"), ("response.json", "Full raw response"))
+                     if isinstance(attempt.get("call_directory"), str))
+        + '</p></article>' for attempt in attempts)
+    return (f'<section><h3>Annotation failed after {len(attempts)} attempts</h3>'
+            f'<p class="muted">Each reply was kept; none met the annotation contract.</p>{items}</section>')
+
+
+def _card(packet, record, root, failure=None):
     record = _mapping(record)
     annotation = _mapping(record.get("annotation"))
+    failure = _mapping(failure)
     target_id = packet.get("target_frame_id", record.get("target_frame_id", "Unavailable"))
     views = _rows(packet.get("views"))
     images = ''.join(_view(view, target_id, root) for view in views)
@@ -102,14 +116,18 @@ def _card(packet, record, root):
                         f'<p>{_escape(row.get("reason", ""))}</p>'
                         f'<span class="muted">Evidence needed: {_escape(row.get("kind", ""))}</span></article>'
                         for row in _rows(annotation.get("unresolved_questions")))
-    body = (_claims(annotation, packet) if annotation else
+    body = (_claims(annotation, packet) if annotation else _failure(failure, root) if failure else
             '<p class="muted">Independent MedGemma annotation pending.</p>')
+    flags = [str(flag).replace("_", " ") for flag in record.get("quality_flags", []) if isinstance(flag, str)]
+    decoding = (f'<p class="muted">Decoding: {_escape(record["decoding_stage"])}'
+                + (f' · Quality flags: {_escape(", ".join(flags))}' if flags else '') + '</p>'
+                if isinstance(record.get("decoding_stage"), str) else '')
     call = _path(record.get("call_directory"), root)
     links = ' · '.join(_link(call / name, label) for name, label in
                         (("request.json", "Exact MedGemma request"), ("response.json", "Full raw MedGemma response"))) if call else ''
     return f'''<article class="frame"><h2>{_escape(target_id)}</h2>
-<p class="badge">{_escape(annotation.get('status', 'pending'))}</p>
-<p class="muted">Visibility: {_escape(annotation.get('visibility', 'unavailable'))}</p>
+<p class="badge">{_escape(annotation.get('status', 'failed' if failure else 'pending'))}</p>
+<p class="muted">Visibility: {_escape(annotation.get('visibility', 'unavailable'))}</p>{decoding}
 <details open><summary>Target, detail crops, and context · {len(views)} image(s)</summary><div class="filmstrip">{images}</div></details>
 {body}<section><h3>Unresolved questions</h3>{questions or '<p class="muted">No unresolved questions recorded.</p>'}</section>
 {_details('Procedure context and evidence limitations', {key: packet.get(key) for key in ('procedure_context', 'limitations', 'neighbor_coverage', 'media_timeline')})}
@@ -126,6 +144,8 @@ def write_annotation_report(output_dir) -> Path:
     document = _mapping(_read(root / "annotations.json", warnings))
     records = {row["target_frame_id"]: row for row in _rows(document.get("annotations"))
                if isinstance(row.get("target_frame_id"), str)}
+    failures = {row["target_frame_id"]: row for row in _rows(summary.get("failed_targets"))
+                if isinstance(row.get("target_frame_id"), str) and row["target_frame_id"] not in records}
     packets = {}
     for path in sorted((root / "evidence").glob("*.json")):
         packet = _read(path, warnings)
@@ -134,7 +154,9 @@ def write_annotation_report(output_dir) -> Path:
     # The separate evidence artifact is authoritative for displayed images. A
     # damaged packet must never cause model-supplied paths to become image URLs.
     ids = list(packets) + [target_id for target_id in records if target_id not in packets]
-    cards = ''.join(_card(packets.get(target_id, {}), records.get(target_id), root) for target_id in ids)
+    ids += [target_id for target_id in failures if target_id not in ids]
+    cards = ''.join(_card(packets.get(target_id, {}), records.get(target_id), root, failures.get(target_id))
+                    for target_id in ids)
     links = ' · '.join(_link(root / name, label) for name, label in
                         (("run.json", "Configuration and pinned inputs"), ("summary.json", "Run summary"),
                          ("annotations.json", "All saved annotations")) if (root / name).is_file())
@@ -147,7 +169,7 @@ def write_annotation_report(output_dir) -> Path:
 h1,h2,h3{{line-height:1.25}}.frame,.overview{{padding:24px;background:white;border:1px solid #d9e1e8;border-radius:10px;margin:24px 0}}.muted{{color:#526477}}.badge{{display:inline-block;background:#e7f2ed;padding:3px 8px;border-radius:5px}}a{{color:#145c96;overflow-wrap:anywhere}}.filmstrip{{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:16px;margin-top:16px}}figure{{margin:0;border:1px solid #d9e1e8;padding:10px}}img{{display:block;width:100%;height:auto}}figcaption{{font-size:13px;overflow-wrap:anywhere}}.claim{{border-top:1px solid #d9e1e8;padding:12px 0}}.uncertainty{{color:#765214}}details{{margin:16px 0}}summary{{cursor:pointer}}pre{{white-space:pre-wrap;overflow-wrap:anywhere;background:#f1f5f7;padding:12px;font-size:12px}}section{{margin-top:24px}}
 </style></head><body><main><h1>Independent MedGemma annotations</h1>
 <p>Surgical claims authored from each target image, detail crops, and supplied context. Each claim links to its image evidence.</p>
-<section class="overview"><b>{_escape(summary.get('annotated_frame_count', len(records)))} / {_escape(summary.get('selected_frame_count', len(ids)))} annotations saved</b>
+<section class="overview"><b>{_escape(summary.get('annotated_frame_count', len(records)))} / {_escape(summary.get('selected_frame_count', len(ids)))} annotations saved{f' · {len(failures)} failed' if failures else ''}</b>
 <p>Status: {_escape(summary.get('status', 'summary unavailable'))}</p>
 <p>Model drafts · Human review required · Not eligible for training</p><p>{links}</p>{error_html}{warning_html}</section>
 {cards or '<p class="muted">No saved evidence packets or accepted annotations are available yet.</p>'}</main></body></html>'''

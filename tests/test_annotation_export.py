@@ -13,7 +13,7 @@ from yasargil.__main__ import main
 from yasargil.annotation_export import INSTRUCTION, annotation_text, export_reviewed_annotations
 from yasargil.contract import ANNOTATION_EXPORT_VERSION, ContractError, load_export
 from yasargil.dataset_inspector import InspectorStore
-from yasargil.medgemma_annotation_contract import build_annotation
+from yasargil.medgemma_annotation_contract import PROTOCOL_V1, build_annotation
 from yasargil.medgemma_annotation_evidence import canonical_frame
 
 
@@ -73,7 +73,7 @@ class AnnotationExportTests(unittest.TestCase):
                             "support": "target_visible", "evidence_view_ids": [f"f{index}:detail:1"],
                             "uncertainty": "Subtype uncertain"}],
                 "unresolved_questions": [{"question": "Which tissue is visible?", "reason": "Boundary obscured",
-                                          "kind": "target_detail"}]}, packet)
+                                          "kind": "target_detail"}]}, packet, PROTOCOL_V1)
             self.annotations[f"f{index}"] = annotation
             name = f"evidence/frame-{index:04d}.json"
             write(self.medgemma / name, packet)

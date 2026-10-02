@@ -28,8 +28,9 @@ from urllib.parse import parse_qs, unquote, urlsplit
 
 
 _SELECTION = "smart-frame-selection-run-v1"
-_MEDGEMMA_ANNOTATION = "medgemma-frame-annotation-v1"
-_SCHEMAS = {_SELECTION, _MEDGEMMA_ANNOTATION}
+# Each run is re-derived under the annotation protocol it was produced with.
+_MEDGEMMA_ANNOTATIONS = {"medgemma-frame-annotation-v1", "medgemma-frame-annotation-v2"}
+_SCHEMAS = {_SELECTION, *_MEDGEMMA_ANNOTATIONS}
 _CASE = re.compile(r"(?:S[1-8]A[1-3]|Clip[01])")
 _IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".tif", ".tiff"}
 _VIDEO_SUFFIXES = {".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v"}
@@ -577,7 +578,7 @@ class InspectorStore:
 
         matching = []
         for child, plan in runs:
-            if plan.get("schema_version") != _MEDGEMMA_ANNOTATION or not _same_path(plan.get("selection_run"), root):
+            if plan.get("schema_version") not in _MEDGEMMA_ANNOTATIONS or not _same_path(plan.get("selection_run"), root):
                 continue
             source_path = saved_path(child, plan.get("source_file"))
             copied = _read(source_path) if source_path else None
@@ -657,17 +658,18 @@ class InspectorStore:
             if valid_packet(packet):
                 packets[packet["target_frame_id"]] = packet
         document = _read(child / "annotations.json")
-        if isinstance(document, dict) and document.get("schema_version") == _MEDGEMMA_ANNOTATION:
+        protocol = plan["schema_version"]
+        if isinstance(document, dict) and document.get("schema_version") == protocol:
             for row in _objects(document, "annotations"):
                 target, annotation, packet = row.get("target_frame_id"), row.get("annotation"), row.get("evidence")
                 if (target in packets and packet == packets[target] and row.get("target") == canonical.get(target)
-                        and isinstance(annotation, dict) and annotation.get("schema_version") == _MEDGEMMA_ANNOTATION
+                        and isinstance(annotation, dict) and annotation.get("schema_version") == protocol
                         and annotation.get("target_frame_id") == target):
                     raw = {key: annotation.get(key) for key in ("target_frame_id", "visibility", "unresolved_questions")}
                     raw["claims"] = [{key: value for key, value in claim.items() if key != "evidence_frame_ids"}
                                      for claim in _objects(annotation, "claims")]
                     try:
-                        if build_annotation(raw, packet) != annotation:
+                        if build_annotation(raw, packet, protocol) != annotation:
                             raise ValueError("Derived annotation differs from saved claims")
                     except ValueError:
                         self._warn(f"Skipped independent MedGemma annotation with invalid claims: {child}")

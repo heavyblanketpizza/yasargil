@@ -1,11 +1,12 @@
 """Label-based and degraded perception sources."""
+import csv
 from pathlib import Path
 import tempfile
 import unittest
 
 from live_fixtures import box, make_case, tip
 from yasargil.live.frames import case_frames
-from yasargil.live.labels import CaseLabels
+from yasargil.live.labels import BOXES, POINTS, CaseLabels, LabelGeometry
 from yasargil.live.perception import DegradedPerception, Detection, LabelPerception, Observation
 
 
@@ -13,7 +14,7 @@ class PerceptionTests(unittest.TestCase):
     def setUp(self):
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
-        root = Path(directory.name)
+        root = self.root = Path(directory.name)
         make_case(root, "S1A1", {
             1: [tip("needle driver base", 64, 0), tip("needle driver tip", 32, 18), box("needle driver", 30, 0, 64, 20),
                 box("durotomy", 16, 9, 48, 27), tip("grasper", 8, 9)],
@@ -44,6 +45,42 @@ class PerceptionTests(unittest.TestCase):
         make = self.perception.observe(self.frame(2)).find("nerve hook")
         self.assertEqual(make.tip, (0.25, 0.75))
         self.assertIsNone(make.box)
+
+    def test_computed_region_wins_over_point_table_rectangles(self):
+        # The release includes point annotations with fractional-pixel extent.
+        # Those rows precede the computed body boxes when the tables are loaded.
+        with (self.root / POINTS).open("a", newline="") as stream:
+            writer = csv.DictWriter(stream, fieldnames=["", "trial_frame", "x1", "y1", "x2", "y2", "label"])
+            for label, coords in (("durotomy", (16.2, 9.1, 16.7, 9.6)),
+                                  ("needle driver base", (63.0, 0.0, 63.8, 0.8))):
+                writer.writerow({"": "extra", "trial_frame": "S1A1_frame_00000001.jpeg", "label": label,
+                                 **dict(zip(("x1", "y1", "x2", "y2"), coords))})
+        labels = CaseLabels.load(self.root, "S1A1", (64, 36))
+        observation = LabelPerception(labels).observe(self.frame(1))
+        self.assertEqual(observation.find("durotomy").box, (0.25, 0.25, 0.75, 0.75))
+        driver = observation.find("needle driver")
+        self.assertEqual(driver.box, (30 / 64, 0.0, 1.0, 20 / 36))
+        self.assertEqual(driver.tip, (0.5, 0.5))
+        small = next(item for item in labels.items(1) if item.label == "durotomy" and item.source_table == POINTS)
+        self.assertEqual(small.box, (16.2 / 64, 9.1 / 36, 16.7 / 64, 9.6 / 36))
+
+    def test_region_selection_uses_table_priority_then_largest_valid_box(self):
+        small = (0.4, 0.4, 0.5, 0.5)
+        large = (0.1, 0.2, 0.8, 0.9)
+        invalid = (0.0, 0.0, 1.0, 0.0)
+        cases = [
+            ([LabelGeometry("durotomy", "anatomy", "body", None, large, POINTS),
+              LabelGeometry("durotomy", "anatomy", "body", None, small, BOXES)], small),
+            ([LabelGeometry("durotomy", "anatomy", "body", None, small),
+              LabelGeometry("durotomy", "anatomy", "body", None, invalid),
+              LabelGeometry("durotomy", "anatomy", "body", None, large)], large),
+            ([LabelGeometry("durotomy", "anatomy", "body", None, invalid, BOXES),
+              LabelGeometry("durotomy", "anatomy", "body", None, large, POINTS)], large),
+        ]
+        for items, expected in cases:
+            with self.subTest(items=items):
+                labels = CaseLabels("S1A1", {1: items}, {1}, {}, 0)
+                self.assertEqual(LabelPerception(labels).observe(self.frame(1)).find("durotomy").box, expected)
 
     def test_annotation_status_is_reported(self):
         self.assertTrue(self.perception.observe(self.frame(3)).annotated)

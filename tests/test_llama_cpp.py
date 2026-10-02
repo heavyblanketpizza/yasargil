@@ -15,7 +15,7 @@ from unittest.mock import MagicMock, patch
 from urllib import error
 
 from yasargil.llama_cpp import (
-    LlamaCppClient, LlamaCppError, MEDGEMMA_MODEL, MODEL_FILES, QWEN_MODEL,
+    LlamaCppClient, LlamaCppError, LlamaCppIncompleteError, MEDGEMMA_MODEL, MODEL_FILES, QWEN_MODEL,
     _gguf_metadata, _object, build_chat_request, encode_request,
 )
 
@@ -147,6 +147,34 @@ class LlamaCppTests(unittest.TestCase):
         self.assertEqual(receipt["response_sha256"], hashlib.sha256(raw).hexdigest())
         runtime = json.loads((self.client.last_runtime_dir / "runtime.json").read_bytes())
         self.assertEqual(runtime["request_sha256"], hashlib.sha256(chat.data).hexdigest())
+
+    def test_wire_schema_keeps_declared_property_order(self):
+        # llama.cpp compiles object properties into the grammar in the order it
+        # receives them; sorted keys would force alphabetical generation order.
+        schema = {"type": "object", "properties": {"visibility": {"type": "string"},
+                  "claims": {"type": "array", "items": {"type": "object", "properties": {
+                      "statement": {"type": "string"}, "category": {"type": "string"}}}}}}
+        request = build_chat_request(MEDGEMMA_MODEL, [{"role": "user", "content": "x"}], schema, 8192, 1024, 42)
+        self.serve(encode_request(reply()))
+        with self.runtime_mocks():
+            self.client.chat_raw(request)
+        sent = json.loads(self.opener.open.call_args_list[-1].args[0].data)["response_format"]["json_schema"]["schema"]
+        self.assertEqual(list(sent["properties"]), ["visibility", "claims"])
+        self.assertEqual(list(sent["properties"]["claims"]["items"]["properties"]), ["statement", "category"])
+
+    def test_unfinished_generation_is_distinguishable_from_other_failures(self):
+        for reason, expected in (("length", LlamaCppIncompleteError), ("stop", None)):
+            value = reply()
+            value["choices"][0]["finish_reason"] = reason
+            with self.subTest(reason=reason):
+                if expected:
+                    with self.assertRaises(expected):
+                        LlamaCppClient._validate_chat(value, MEDGEMMA_MODEL)
+                else:
+                    LlamaCppClient._validate_chat(value, MEDGEMMA_MODEL)
+        with self.assertRaises(LlamaCppError) as raised:
+            LlamaCppClient._validate_chat({**reply(), "model": "another-model"}, MEDGEMMA_MODEL)
+        self.assertNotIsInstance(raised.exception, LlamaCppIncompleteError)
 
     def test_qwen_preserves_default_jinja_template_without_gemma_override(self):
         raw = encode_request(reply(QWEN_MODEL))

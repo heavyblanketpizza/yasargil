@@ -20,7 +20,12 @@ Each fresh request has one selected target and a bounded packet of source images
 
 The request presents the full target, its detail crops, then context images in
 chronological order, followed by compact metadata. The default is up to nine
-image views from five source observations. Sequence boundaries produce smaller packets. Only the target and its detail
+image views from five source observations. Sequence boundaries produce smaller packets.
+All views go into a single user turn, because Gemma's chat format alternates
+user and model turns. Each image is preceded by a short citation label: `T` for
+the full target, `T1`–`T4` for its crops, `B1`, `B2` for earlier observations and
+`A1`, `A2` for later ones, numbered outward from the target. Frame IDs stay out of
+the prompt; software maps labels back to full view IDs. Only the target and its detail
 views support claims described as directly visible in the target. Neighboring
 images may support contextual claims; they cannot transfer their own visible
 findings into the target. Unobserved motion, hidden anatomy, intent, success,
@@ -52,13 +57,25 @@ uv run yasargil annotate-selected-frames \
 
 Omit `--prepare-only` to prepare and annotate in one invocation. A changed prompt,
 selection, or configuration requires a new output directory outside the source
-dataset. Defaults are 32,768 context tokens, 4,096 output tokens per target,
+dataset. Defaults are 32,768 context tokens, 8,192 output tokens per target,
 two earlier/two later observations, deterministic target crops enabled, and
 seed 42. Image processing, text, and the reserved output must all fit the
-context budget. A valid result needs a complete response and valid evidence;
-there is no silent target dropping. Use `--before-frames 0 --after-frames 0
+context budget. Preparation refuses an output budget smaller than the largest
+answer the response schema permits, so ordinary English text cannot reach the
+token limit before the schema closes the answer. Use `--before-frames 0 --after-frames 0
 --no-detail-crops` for a target-only comparison. `--procedure-context` can supply
 verified background; when omitted, the saved selection context is inherited.
+
+Each target is first annotated with greedy decoding. A reply that is unfinished,
+breaks the response contract, or repeats itself is rejected and kept. A rejected
+target gets one further attempt using Gemma's published sampling settings
+(temperature 1.0, top-k 64, top-p 0.95, min-p 0). If that attempt is also
+rejected, the target is recorded as failed and the run continues with the next
+target. There is no silent target dropping: `summary.json` lists every failed
+target with each attempt's decoding stage and rejection reason, and the report
+links each raw reply. `--no-fallback-sampling` records a failure after the first
+rejection instead. Runtime faults, such as an unreachable server or an
+insufficient context budget, stop the run; resume retries the same attempt.
 
 If the source images moved since selection (for example, a different disk or a
 fresh download), pass `--source-dir /path/to/datasets/SOSpine/frames/<case>` when
@@ -81,12 +98,27 @@ packets, and per-target annotations are retained for inspection.
 
 ## What the annotation should capture
 
-The protocol is `medgemma-frame-annotation-v1`, with evidence packets using
-`medgemma-annotation-evidence-v1`. The model returns `target_frame_id`,
-`visibility`, `claims`, and `unresolved_questions`. Each claim has a `claim_id`,
-`category`, `statement`, `support`, `evidence_view_ids`, and `uncertainty`. Software
-derives separate target and contextual captions from those claims, so no extra
-uncited summary can add facts. The prompt covers instruments and materials, identifiable tissue,
+The protocol is `medgemma-frame-annotation-v2`, with evidence packets using
+`medgemma-annotation-evidence-v1`. The model returns `visibility`, `claims`, and
+`unresolved_questions`, in that order. Each claim gives its `statement`, then
+`category`, `support`, `evidence_view_ids` (citation labels), and `uncertainty`.
+The JSON schema constrains generation in this property order, so the model judges
+visibility before writing claims and writes each statement before classifying and
+citing it. Requests preserve the declared order on the wire. Software adds the
+target frame ID and claim IDs, maps labels to full view IDs, and derives separate
+target and contextual captions from the claims, so no extra uncited summary can
+add facts. An answer has at most 12 claims and 4 unresolved questions.
+
+A repeated statement, or several near-identical statements that differ only in a
+detail such as a number, makes the answer invalid. A citation repeated within one
+claim carries no information; it is removed and the row records the
+`duplicate_citations_removed` quality flag. An answer that fills all 12 claim
+slots is accepted with the `claim_cap_reached` flag, because a full list can hide
+a truncated enumeration. Each accepted row also records its decoding stage.
+
+Runs made with `medgemma-frame-annotation-v1` keep their original rules when
+inspected or exported and cannot be resumed under v2; annotate again in a new
+output directory. The prompt covers instruments and materials, identifiable tissue,
 spatial relationships, local surgical state, context-supported action, and
 visibility limitations. Empty claim lists and specific uncertainty are preferable
 to filling a category with unsupported detail.

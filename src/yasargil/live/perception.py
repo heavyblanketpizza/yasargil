@@ -11,7 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import random
 
-from .labels import INSTRUMENTS
+from .labels import BOXES, INSTRUMENTS
 
 
 @dataclass(frozen=True)
@@ -88,7 +88,7 @@ def crop_observation(observation, crop):
 class LabelPerception:
     """Dataset labels replayed as perception: the ceiling every model is compared with."""
 
-    producer = "labels/v1"
+    producer = "labels/v2"
 
     def __init__(self, labels):
         self.labels = labels
@@ -108,7 +108,14 @@ class LabelPerception:
             tip = next((item.point for item in points if item.part == "tip"), None)
             if tip is None:
                 tip = next((item.point for item in points if item.part == "body"), None)
-            box = next((item.box for item in items if item.box is not None), None)
+            # Point-table annotations can have a small nonzero extent. Prefer
+            # the computed body region, retaining the point geometry separately.
+            boxes = [item for item in items if item.box is not None
+                     and item.box[2] > item.box[0] and item.box[3] > item.box[1]]
+            regions = [item for item in boxes if item.source_table == BOXES and item.part == "body"]
+            region = max(regions or boxes, key=lambda item: (item.box[2] - item.box[0])
+                         * (item.box[3] - item.box[1]), default=None)
+            box = region.box if region is not None else None
             if box is None and len(points) >= 2:
                 xs, ys = [item.point[0] for item in points], [item.point[1] for item in points]
                 box = (min(xs), min(ys), max(xs), max(ys))

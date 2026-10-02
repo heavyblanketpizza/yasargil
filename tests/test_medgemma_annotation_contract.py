@@ -6,7 +6,8 @@ from jsonschema import Draft202012Validator
 
 from yasargil.contract import ContractError
 from yasargil.medgemma_annotation_contract import (
-    ANNOTATION_SYSTEM, annotation_schema, build_annotation, validate_annotation,
+    ANNOTATION_SYSTEM, PROTOCOL_V1, annotation_from_answer, annotation_schema, answer_schema,
+    build_annotation, validate_annotation, view_labels,
 )
 
 
@@ -29,7 +30,123 @@ def response():
          "uncertainty": "The intervening trajectory is unobserved."}], "unresolved_questions": []}
 
 
+def answer():
+    """The model-facing v2 form of response(): short labels, no IDs."""
+    return {"visibility": "partial", "claims": [
+        {"statement": "A metal instrument is visible.", "category": "instrument",
+         "support": "target_visible", "evidence_view_ids": ["T", "T1"], "uncertainty": ""},
+        {"statement": "The instrument approaches the tissue edge.", "category": "action",
+         "support": "context_supported", "evidence_view_ids": ["B1", "T"],
+         "uncertainty": "The intervening trajectory is unobserved."}], "unresolved_questions": []}
+
+
+def with_statements(statements):
+    raw = response()
+    raw["claims"] = [{"claim_id": f"c{number}", "category": "instrument", "statement": text,
+                      "support": "target_visible", "evidence_view_ids": ["f1:full"], "uncertainty": ""}
+                     for number, text in enumerate(statements, 1)]
+    return raw
+
+
+DISTINCT = ["A grasper is visible.", "A suture strand crosses the field.", "Blood pools inferiorly.",
+            "The dura is pale.", "A ruler lies across the port.", "Glare obscures the upper rim.",
+            "The tube wall is metallic.", "A needle tip is visible.", "Tissue edges are irregular.",
+            "The opening is circular.", "Fluid reflects the light.", "Two instruments overlap."]
+
+
 class AnnotationContractTests(unittest.TestCase):
+    def test_views_get_short_labels_numbered_outward_from_the_target(self):
+        self.assertEqual(view_labels(packet()), {"f1:full": "T", "f1:detail:1": "T1", "f1:detail:2": "T2",
+                                                 "f0:full": "B1", "f2:full": "A1"})
+        evidence = packet()
+        evidence["frames"].insert(0, {"frame_id": "fa"})
+        evidence["views"].insert(3, {"view_id": "fa:full", "frame_id": "fa", "role": "context_before"})
+        self.assertEqual(view_labels(evidence)["fa:full"], "B2")
+        self.assertEqual(view_labels(evidence)["f0:full"], "B1")
+
+    def test_context_view_direction_must_match_its_source_position(self):
+        evidence = packet()
+        evidence["views"][-1]["role"] = "context_before"
+        with self.assertRaisesRegex(ContractError, "before"):
+            view_labels(evidence)
+
+    def test_answer_schema_puts_assessment_and_statements_before_classification(self):
+        schema = answer_schema(packet())
+        Draft202012Validator.check_schema(schema)
+        self.assertEqual(list(schema["properties"]), ["visibility", "claims", "unresolved_questions"])
+        claim = schema["properties"]["claims"]["items"]
+        self.assertEqual(list(claim["properties"]),
+                         ["statement", "category", "support", "evidence_view_ids", "uncertainty"])
+        self.assertEqual(claim["properties"]["evidence_view_ids"]["items"]["enum"], ["T", "T1", "T2", "B1", "A1"])
+
+    def test_answer_maps_labels_back_and_software_assigns_identity(self):
+        evidence, model_answer = packet(), answer()
+        before = copy.deepcopy((evidence, model_answer))
+        raw, flags = annotation_from_answer(model_answer, evidence)
+        self.assertEqual(raw, response())
+        self.assertEqual(flags, [])
+        self.assertEqual((evidence, model_answer), before)
+
+    def test_repeated_citations_are_dropped_and_flagged(self):
+        model_answer = answer()
+        model_answer["claims"][0]["evidence_view_ids"] = ["T", "T1", "T"]
+        raw, flags = annotation_from_answer(model_answer, packet())
+        self.assertEqual(raw["claims"][0]["evidence_view_ids"], ["f1:full", "f1:detail:1"])
+        self.assertEqual(flags, ["duplicate_citations_removed"])
+
+    def test_filling_the_claim_cap_is_flagged(self):
+        model_answer = answer()
+        model_answer["claims"] = [dict(answer()["claims"][0], statement=text) for text in DISTINCT]
+        _, flags = annotation_from_answer(model_answer, packet())
+        self.assertEqual(flags, ["claim_cap_reached"])
+
+    def test_answers_outside_the_v2_contract_are_rejected(self):
+        def unknown_label(value):
+            value["claims"][0]["evidence_view_ids"] = ["X"]
+        def model_written_id(value):
+            value["claims"][0]["claim_id"] = "c9"
+        def model_written_target(value):
+            value["target_frame_id"] = "f1"
+        def too_many_claims(value):
+            value["claims"] = [dict(answer()["claims"][0], statement=text) for text in DISTINCT + ["One more."]]
+        def overlong_statement(value):
+            value["claims"][0]["statement"] = "x" * 201
+        for change in (unknown_label, model_written_id, model_written_target, too_many_claims, overlong_statement):
+            value = answer()
+            change(value)
+            with self.subTest(change=change.__name__), self.assertRaises(ContractError):
+                annotation_from_answer(value, packet())
+
+    def test_repetition_loops_are_rejected(self):
+        loops = {"exact": ["The needle is positioned within a hole.", "the needle is positioned within a hole"],
+                 "templated": [f"The instrument is contacting a structure marked with '{n}'." for n in (1, 2, 3)]}
+        for name, statements in loops.items():
+            with self.subTest(loop=name), self.assertRaisesRegex(ContractError, "Degenerate"):
+                validate_annotation(with_statements(statements), packet())
+
+    def test_similar_but_distinct_findings_are_accepted(self):
+        # A real 12-claim answer whose closest pairs score 0.906 and 0.780.
+        raw = with_statements([
+            "A surgical instrument is visible.", "The instrument has a working end.", "The instrument has a handle.",
+            "The instrument has a scale.", "The instrument is a retractor.",
+            "The retractor is positioned in a surgical site.", "Tissue is visible within the surgical site.",
+            "The tissue appears to be dura.", "The dura appears torn or damaged.",
+            "The retractor is positioned to expose the damaged dura.", "The retractor is holding the tissue.",
+            "The procedure is likely a surgical repair."])
+        self.assertEqual(validate_annotation(raw, packet()), raw)
+
+    def test_v1_records_keep_their_original_rules_and_version(self):
+        raw = with_statements(DISTINCT + ["A thirteenth distinct finding.", "x" * 700])
+        with self.assertRaises(ContractError):
+            build_annotation(raw, packet())
+        self.assertEqual(build_annotation(raw, packet(), protocol=PROTOCOL_V1)["schema_version"],
+                         "medgemma-frame-annotation-v1")
+        loop = with_statements([f"Marked with '{n}'." for n in range(3)])
+        self.assertEqual(build_annotation(loop, packet(), protocol=PROTOCOL_V1)["status"], "annotated")
+
+    def test_new_annotations_are_stamped_v2(self):
+        self.assertEqual(build_annotation(response(), packet())["schema_version"], "medgemma-frame-annotation-v2")
+
     def test_strict_schema_and_independent_prompt(self):
         Draft202012Validator.check_schema(annotation_schema(packet()))
         raw = response()

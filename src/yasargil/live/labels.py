@@ -45,6 +45,7 @@ class LabelGeometry:
     part: str
     point: tuple | None
     box: tuple | None
+    source_table: str = ""
 
 
 class CaseLabels:
@@ -105,7 +106,7 @@ class CaseLabels:
                     else:
                         point, box = None, (min(nx1, nx2), min(ny1, ny2), max(nx1, nx2), max(ny1, ny2))
                     label, part, kind = normalized
-                    geometry = LabelGeometry(label, kind, part, point, box)
+                    geometry = LabelGeometry(label, kind, part, point, box, name)
                     bucket = items.setdefault(index, [])
                     if geometry not in bucket:
                         bucket.append(geometry)

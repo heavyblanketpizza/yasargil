@@ -34,6 +34,10 @@ class LlamaCppError(RuntimeError):
     """A local runtime, model, transport or response validation failure."""
 
 
+class LlamaCppIncompleteError(LlamaCppError):
+    """The model stopped before finishing its answer, e.g. at the token limit."""
+
+
 def encode_request(request: dict) -> bytes:
     if not isinstance(request, dict):
         raise LlamaCppError("llama.cpp request must be a JSON object.")
@@ -49,7 +53,9 @@ def encode_request(request: dict) -> bytes:
                 check_keys(child)
     try:
         check_keys(request)
-        return json.dumps(request, ensure_ascii=False, sort_keys=True,
+        # Key order is meaningful: llama.cpp emits schema properties in the order
+        # received. Insertion order keeps the bytes deterministic.
+        return json.dumps(request, ensure_ascii=False,
                           separators=(",", ":"), allow_nan=False).encode("utf-8")
     except (TypeError, ValueError, UnicodeError, RecursionError) as exc:
         raise LlamaCppError(f"Cannot encode llama.cpp request as JSON: {exc}") from exc
@@ -77,7 +83,19 @@ def _object(raw: bytes, context: str) -> dict:
     return result
 
 
-def build_chat_request(model, messages, schema, num_ctx, num_predict, seed, temperature=0):
+def image_part(image):
+    """An inline PNG/JPEG content part from base64 image data."""
+    try:
+        raw = base64.b64decode(image, validate=True)
+    except (ValueError, TypeError) as exc:
+        raise LlamaCppError("Invalid base64 image.") from exc
+    if not raw:
+        raise LlamaCppError("Empty image.")
+    mime = "image/png" if raw.startswith(b"\x89PNG\r\n\x1a\n") else "image/jpeg"
+    return {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{image}"}}
+
+
+def build_chat_request(model, messages, schema, num_ctx, num_predict, seed, temperature=0, sampling=None):
     """Convert original-image messages to the native OpenAI-compatible wire form."""
     converted = copy.deepcopy(messages)
     for message in converted:
@@ -86,22 +104,14 @@ def build_chat_request(model, messages, schema, num_ctx, num_predict, seed, temp
             content = message["content"]
             if not isinstance(content, str) or not isinstance(images, list):
                 raise LlamaCppError("Image messages require text and a list of base64 images.")
-            parts = [{"type": "text", "text": content}]
-            for image in images:
-                try:
-                    raw = base64.b64decode(image, validate=True)
-                except (ValueError, TypeError) as exc:
-                    raise LlamaCppError("Invalid base64 image.") from exc
-                if not raw:
-                    raise LlamaCppError("Empty image.")
-                mime = "image/png" if raw.startswith(b"\x89PNG\r\n\x1a\n") else "image/jpeg"
-                parts.append({"type": "image_url", "image_url": {"url": f"data:{mime};base64,{image}"}})
-            message["content"] = parts
-    return {"model": model, "messages": converted, "stream": False,
-            "response_format": {"type": "json_schema", "json_schema": {
-                "name": "response", "strict": True, "schema": schema}},
-            "temperature": temperature, "seed": seed, "max_tokens": num_predict,
-            "n_ctx": num_ctx, "cache_prompt": False, "reasoning_effort": "none"}
+            message["content"] = [{"type": "text", "text": content}, *(image_part(image) for image in images)]
+    request = {"model": model, "messages": converted, "stream": False,
+               "response_format": {"type": "json_schema", "json_schema": {
+                   "name": "response", "strict": True, "schema": schema}},
+               "temperature": temperature, "seed": seed, "max_tokens": num_predict,
+               "n_ctx": num_ctx, "cache_prompt": False, "reasoning_effort": "none"}
+    request.update(sampling or {})
+    return request
 
 
 def _gguf_metadata(path):
@@ -262,7 +272,8 @@ class LlamaCppClient:
             raise LlamaCppError("llama.cpp response must contain exactly one choice.")
         choice = choices[0]
         if choice.get("finish_reason") != "stop" or data.get("truncated"):
-            raise LlamaCppError("llama.cpp response is unfinished or truncated (finish_reason must be stop).")
+            raise LlamaCppIncompleteError(
+                "llama.cpp response is unfinished or truncated (finish_reason must be stop).")
         message = choice.get("message")
         if (not isinstance(message, dict) or message.get("role") != "assistant"
                 or not isinstance(message.get("content"), str) or not message["content"].strip()):

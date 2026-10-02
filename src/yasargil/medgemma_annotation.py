@@ -12,14 +12,27 @@ from pathlib import Path
 
 from .checkpoint import atomic_bytes, atomic_json, directory_is_locked, directory_lock, durable_mkdir
 from .contract import ContractError, canonical_hash, require, sha256_file
-from .llama_cpp import MEDGEMMA_MODEL, LlamaCppClient, LlamaCppError, _object, build_chat_request, encode_request
+from .llama_cpp import (
+    MEDGEMMA_MODEL, LlamaCppClient, LlamaCppError, LlamaCppIncompleteError, _object, build_chat_request,
+    encode_request, image_part,
+)
 from .llama_video import _strict_json
-from .medgemma_annotation_contract import ANNOTATION_SYSTEM, annotation_schema, build_annotation
+from .medgemma_annotation_contract import (
+    ANNOTATION_SYSTEM, PROTOCOL_V1, PROTOCOL_VERSION, annotation_from_answer, answer_schema, build_annotation,
+    max_answer_chars, view_labels,
+)
 from .medgemma_annotation_evidence import build_evidence
 from .smart_selection import validate_completed_selection, verify_assets
 
 
-PROTOCOL_VERSION = "medgemma-frame-annotation-v1"
+# Primary decoding is greedy and reproducible. A rejected answer gets one attempt
+# with Gemma's published sampling settings before the target is recorded as failed.
+DECODING = {"primary": {"temperature": 0},
+            "fallback": {"temperature": 1.0, "top_k": 64, "top_p": 0.95, "min_p": 0.0, "repeat_penalty": 1.0}}
+
+
+class AnnotationRejected(ContractError):
+    """A complete reply whose answer is unusable: unfinished, invalid or degenerate."""
 
 
 @dataclass(frozen=True)
@@ -29,9 +42,10 @@ class AnnotationConfig:
     after_frames: int = 2
     detail_crops: bool = True
     num_ctx: int = 32768
-    num_predict: int = 4096
+    num_predict: int = 8192
     seed: int = 42
     procedure_context: str = ""
+    fallback_sampling: bool = True
 
     def validate(self):
         require(self.medgemma_model == MEDGEMMA_MODEL, "Use the configured local MedGemma vision model")
@@ -39,12 +53,21 @@ class AnnotationConfig:
             require(type(getattr(self, name)) is int and 0 <= getattr(self, name) <= 8,
                     "Supply 0–8 source context frames on each side")
         require(type(self.detail_crops) is bool, "detail_crops must be boolean")
+        require(type(self.fallback_sampling) is bool, "fallback_sampling must be boolean")
         require(type(self.num_ctx) is int and 8192 <= self.num_ctx <= 131072, "Invalid context budget")
         require(type(self.num_predict) is int and 256 <= self.num_predict <= 8192
                 and self.num_predict < self.num_ctx, "Invalid answer budget")
+        largest = max_answer_chars(["T"] + [f"T{n}" for n in range(1, 5) if self.detail_crops]
+                                   + [f"B{n}" for n in range(1, self.before_frames + 1)]
+                                   + [f"A{n}" for n in range(1, self.after_frames + 1)])
+        require(self.num_predict >= largest, f"The output budget of {self.num_predict} tokens is smaller than "
+                f"the largest answer the schema permits ({largest} characters)")
         require(type(self.seed) is int and self.seed >= 0, "Invalid seed")
         require(isinstance(self.procedure_context, str) and len(self.procedure_context) <= 4000,
                 "Procedure context must be at most 4000 characters")
+
+    def stages(self):
+        return ("primary", "fallback") if self.fallback_sampling else ("primary",)
 
 
 def _now():
@@ -79,7 +102,8 @@ def _protocol_hash():
         "contract": sha256_file(Path(medgemma_annotation_contract.__file__)),
         "evidence": sha256_file(Path(medgemma_annotation_evidence.__file__)),
         "runner": sha256_file(Path(__file__)),
-        "request_layout": "target_views_then_ordered_context_then_allowlisted_metadata_v1"})
+        "request_layout": "system_then_one_user_turn_of_labelled_views_then_allowlisted_metadata_v2",
+        "decoding": DECODING})
 
 
 def _source_dir(source):
@@ -176,10 +200,14 @@ def _prepare(selection_run, output, config, source_dir=None):
         atomic_bytes(output / "run.json", plan_bytes)
 
 
-def build_request(packet, config):
-    """Only explicit visual evidence and documented context enter the model prompt."""
+def build_request(packet, config, stage="primary"):
+    """Only explicit visual evidence and documented context enter the model prompt.
+
+    Gemma alternates user and model turns, so every view goes into one user turn,
+    each image preceded by its citation label. Frame IDs stay out of the prompt.
+    """
     config.validate()
-    messages = [{"role": "system", "content": ANNOTATION_SYSTEM}]
+    require(stage in config.stages(), f"Unknown or disabled decoding stage: {stage}")
     frames = {row["frame_id"]: row for row in packet["frames"]}
     verified = set()
     for frame in frames.values():
@@ -188,20 +216,28 @@ def build_request(packet, config):
             if identity not in verified:
                 require(sha256_file(identity[0]) == identity[1], "Source image changed")
                 verified.add(identity)
+    labels = view_labels(packet)
+    parts = []
     for view in packet["views"]:
         raw = Path(view["image_path"]).read_bytes()
         require(hashlib.sha256(raw).hexdigest() == view["image_sha256"], "Annotation view changed")
-        locator = {key: view[key] for key in ("view_id", "frame_id", "role", "bounds", "width", "height")}
-        locator["timestamp_ms"] = frames[view["frame_id"]]["timestamp_ms"]
-        messages.append({"role": "user", "content": json.dumps(locator),
-                         "images": [base64.b64encode(raw).decode("ascii")]})
-    context = {"task": "Author an independent surgical annotation for this target frame.",
-               "target_frame_id": packet["target_frame_id"], "procedure_context": packet["procedure_context"],
-               "media_timeline": packet["media_timeline"], "limitations": packet["limitations"],
-               "neighbor_coverage": packet["neighbor_coverage"]}
-    messages.append({"role": "user", "content": json.dumps(context, ensure_ascii=False)})
-    return build_chat_request(config.medgemma_model, messages, annotation_schema(packet),
-        num_ctx=config.num_ctx, num_predict=config.num_predict, seed=config.seed)
+        locator = {"role": view["role"], "bounds": view["bounds"],
+                   "timestamp_ms": frames[view["frame_id"]]["timestamp_ms"]}
+        parts += [{"type": "text", "text": f"View {labels[view['view_id']]}: {json.dumps(locator)}"},
+                  image_part(base64.b64encode(raw).decode("ascii"))]
+    context_labels = {view["frame_id"]: labels[view["view_id"]] for view in packet["views"]
+                      if view["role"] in {"context_before", "context_after"}}
+    coverage = {side: {"requested": row["requested"],
+                       "included_views": [context_labels[frame_id] for frame_id in row["included_frame_ids"]],
+                       "unavailable_count": row["unavailable_count"], "availability": row["availability"]}
+                for side, row in packet["neighbor_coverage"].items()}
+    context = {"task": "Author an independent surgical annotation for target view T.",
+               "procedure_context": packet["procedure_context"], "media_timeline": packet["media_timeline"],
+               "limitations": packet["limitations"], "neighbor_coverage": coverage}
+    parts.append({"type": "text", "text": json.dumps(context, ensure_ascii=False)})
+    messages = [{"role": "system", "content": ANNOTATION_SYSTEM}, {"role": "user", "content": parts}]
+    return build_chat_request(config.medgemma_model, messages, answer_schema(packet), num_ctx=config.num_ctx,
+                              num_predict=config.num_predict, seed=config.seed, sampling=DECODING[stage])
 
 
 def _identity(info):
@@ -211,31 +247,49 @@ def _identity(info):
 
 
 def _parse(raw, packet, config):
+    """Return (annotation, quality flags). Unusable answers raise AnnotationRejected;
+    runtime and budget faults raise other errors and stop the batch."""
     envelope = _object(raw, "MedGemma annotation")
-    LlamaCppClient._validate_chat(envelope, config.medgemma_model)
+    try:
+        LlamaCppClient._validate_chat(envelope, config.medgemma_model)
+    except LlamaCppIncompleteError as exc:
+        raise AnnotationRejected(str(exc)) from exc
     usage = envelope.get("usage", {})
     count, completion = usage.get("prompt_tokens"), usage.get("completion_tokens")
     require(type(count) is int and 0 < count <= config.num_ctx - config.num_predict,
             "Prompt usage is unavailable or leaves insufficient answer capacity")
     require(type(completion) is int and 0 < completion <= config.num_predict,
             "Completion usage is unavailable or exceeds the answer budget")
-    return build_annotation(_strict_json(envelope["choices"][0]["message"]["content"]), packet)
+    try:
+        stored, flags = annotation_from_answer(_strict_json(envelope["choices"][0]["message"]["content"]), packet)
+        return build_annotation(stored, packet), flags
+    except (ContractError, ValueError) as exc:
+        raise AnnotationRejected(str(exc)) from exc
 
 
-def _call(output, index, packet, config, client_factory, allow_inference):
-    request = build_request(packet, config)
-    request_bytes = encode_request(request)
-    root = output / "calls" / f"frame-{index:04d}"
+def _record_failure(attempt, client, exc):
+    raw = getattr(client, "last_response_bytes", None)
+    if raw is not None and not (attempt / "response.json").exists():
+        atomic_bytes(attempt / "response.json", raw)
+    atomic_json(attempt / "failure.json", {"type": type(exc).__name__, "message": str(exc), "at": _now()},
+                overwrite=True)
+
+
+def _scan(output, root, packet, config, request_bytes):
+    """Classify saved attempts. Each rejected answer advances to the next decoding stage."""
     marker = root / "accepted-response.json"
     if marker.exists():
         acceptance = _read(marker)
         receipt_path = _relative(output, acceptance["receipt_path"])
         require(receipt_path.parent.parent == root and receipt_path.name == "receipt.json"
                 and sha256_file(receipt_path) == acceptance["receipt_sha256"], "Accepted response receipt changed")
+    stages = config.stages()
     attempts = sorted(root.glob("attempt-*"))
-    accepted = []
+    accepted, rejected = [], []
     for attempt in attempts:
         require(attempt.is_dir() and not attempt.is_symlink(), "Invalid annotation attempt")
+        require(len(rejected) < len(stages), "Annotation attempt follows a failed target")
+        stage = stages[len(rejected)]
         receipt = _read(attempt / "receipt.json") if (attempt / "receipt.json").exists() else None
         if receipt:
             require(set(receipt["files"]) == {"request.json", "response.json", "model.json", "annotation.json"},
@@ -243,7 +297,8 @@ def _call(output, index, packet, config, client_factory, allow_inference):
             for name, digest in receipt["files"].items():
                 require(sha256_file(attempt / name) == digest, "Accepted annotation bytes changed")
         if (attempt / "request.json").exists():
-            require((attempt / "request.json").read_bytes() == request_bytes, "Frozen annotation request changed")
+            require((attempt / "request.json").read_bytes() == request_bytes[stage],
+                    "Frozen annotation request changed")
         if not (attempt / "response.json").exists():
             require(not receipt, "Accepted annotation response missing")
             continue
@@ -252,16 +307,37 @@ def _call(output, index, packet, config, client_factory, allow_inference):
                 "Annotation model identity changed")
         try:
             result = _parse((attempt / "response.json").read_bytes(), packet, config)
+        except AnnotationRejected as exc:
+            require(not receipt, "Accepted annotation no longer validates")
+            rejected.append({"call_directory": str(attempt.relative_to(output)), "decoding_stage": stage,
+                             "error": str(exc)})
+            continue
         except (ContractError, LlamaCppError, ValueError):
             require(not receipt, "Accepted annotation no longer validates")
             continue
-        accepted.append((attempt, result))
+        accepted.append((attempt, stage, result))
     require(len(accepted) <= 1, "Multiple accepted annotations for one target")
-    if accepted:
-        attempt, result = accepted[0]
-    else:
+    return attempts, accepted, rejected
+
+
+def _call(output, index, packet, config, client_factory, allow_inference):
+    stages = config.stages()
+    requests = {stage: build_request(packet, config, stage) for stage in stages}
+    request_bytes = {stage: encode_request(request) for stage, request in requests.items()}
+    root = output / "calls" / f"frame-{index:04d}"
+    # Every new attempt either is accepted, is rejected (advancing the stage) or raises.
+    for _ in range(len(stages) + 1):
+        attempts, accepted, rejected = _scan(output, root, packet, config, request_bytes)
+        if accepted:
+            break
+        if len(rejected) == len(stages):
+            failure = {"target_frame_id": packet["target_frame_id"], "status": "failed", "attempts": rejected,
+                       "error": rejected[-1]["error"], "human_review_required": True}
+            _save_equal(root / "failed.json", failure)
+            return failure
         if not allow_inference():
             return None
+        stage = stages[len(rejected)]
         client = client_factory()
         info = client.model_info(config.medgemma_model)
         require(info.get("name") == config.medgemma_model and "vision" in info.get("capabilities", []),
@@ -275,26 +351,39 @@ def _call(output, index, packet, config, client_factory, allow_inference):
             return None
         attempt = root / f"attempt-{len(attempts) + 1:04d}"
         durable_mkdir(attempt)
-        atomic_bytes(attempt / "request.json", request_bytes)
+        atomic_bytes(attempt / "request.json", request_bytes[stage])
         atomic_json(attempt / "model.json", info)
         client.last_response_bytes = None
         try:
-            raw = client.chat_raw(request)
-            atomic_bytes(attempt / "response.json", raw)
-            result = _parse(raw, packet, config)
+            raw = client.chat_raw(requests[stage])
+        except LlamaCppIncompleteError as exc:
+            # The unfinished reply is kept; rescanning classifies it as a rejected answer.
+            _record_failure(attempt, client, exc)
+            if not (attempt / "response.json").exists():
+                raise
+            continue
         except BaseException as exc:
-            raw = getattr(client, "last_response_bytes", None)
-            if raw is not None and not (attempt / "response.json").exists():
-                atomic_bytes(attempt / "response.json", raw)
-            atomic_json(attempt / "failure.json", {"type": type(exc).__name__, "message": str(exc), "at": _now()})
+            _record_failure(attempt, client, exc)
             raise
-    _save_equal(attempt / "annotation.json", result)
+        atomic_bytes(attempt / "response.json", raw)
+        try:
+            _parse(raw, packet, config)
+        except AnnotationRejected as exc:
+            _record_failure(attempt, client, exc)
+        except BaseException as exc:
+            _record_failure(attempt, client, exc)
+            raise
+    else:
+        raise ContractError("Annotation attempts did not reach a decision")
+    attempt, stage, (annotation, flags) = accepted[0]
+    _save_equal(attempt / "annotation.json", annotation)
     _save_equal(attempt / "receipt.json", {"files": {name: sha256_file(attempt / name)
         for name in ("request.json", "response.json", "model.json", "annotation.json")}})
     _save_equal(root / "accepted-response.json", {"receipt_path": str((attempt / "receipt.json").relative_to(output)),
                                                "receipt_sha256": sha256_file(attempt / "receipt.json")})
     return {"target_frame_id": packet["target_frame_id"], "target": packet["target"], "evidence": packet,
-            "annotation": result, "call_directory": str(attempt.relative_to(output)),
+            "annotation": annotation, "call_directory": str(attempt.relative_to(output)),
+            "decoding_stage": stage, "quality_flags": flags,
             "human_review_required": True, "training_eligible": False}
 
 
@@ -303,14 +392,19 @@ def _document(rows):
             "human_review_required": True, "training_eligible": False}
 
 
-def _publish(output, plan, rows, status, error=None):
+def _publish(output, plan, rows, failures, status, error=None):
     from .medgemma_annotation_report import write_annotation_report
     atomic_json(output / "annotations.json", _document(rows), overwrite=True)
     unresolved = sum(bool(row["annotation"]["unresolved_questions"]) for row in rows)
+    flags = {}
+    for row in rows:
+        for flag in row["quality_flags"]:
+            flags[flag] = flags.get(flag, 0) + 1
     summary = {"schema_version": PROTOCOL_VERSION, "created_at": plan["created_at"], "updated_at": _now(),
                "status": status, "selected_frame_count": len(plan["frame_ids"]), "annotated_frame_count": len(rows),
-               "source_frame_count": plan["source_frame_count"],
-               "unresolved_frame_count": unresolved, "config": plan["config"], "error": error,
+               "failed_frame_count": len(failures), "source_frame_count": plan["source_frame_count"],
+               "unresolved_frame_count": unresolved, "quality_flag_counts": flags, "failed_targets": failures,
+               "config": plan["config"], "error": error,
                "qwen_annotations_included": False, "source_labels_included": False,
                "human_review_required": True, "training_eligible": False}
     atomic_json(output / "summary.json", summary, overwrite=True)
@@ -329,6 +423,8 @@ def run_annotation(selection_run, output_dir, config=None, *, resume=False, prep
     require((output / "run.json").is_file(), "No prepared independent MedGemma annotation found")
     with directory_lock(output):
         plan = _read(output / "run.json")
+        require(plan.get("schema_version") != PROTOCOL_V1,
+                f"This run uses {PROTOCOL_V1}; annotate with {PROTOCOL_VERSION} in a new output directory")
         require(plan.get("schema_version") == PROTOCOL_VERSION and plan.get("runtime") == "llama.cpp",
                 "Expected an independent MedGemma annotation run")
         require(_read(output / "session.json")["run_sha256"] == sha256_file(output / "run.json"), "Frozen plan changed")
@@ -352,14 +448,17 @@ def run_annotation(selection_run, output_dir, config=None, *, resume=False, prep
         previous = published.get("annotations", [])
         require(published == _document(previous), "Published annotation metadata changed")
         previous_by_id = {row["target_frame_id"]: row for row in previous}
-        require([row["target_frame_id"] for row in previous] == plan["frame_ids"][:len(previous)], "Published target order changed")
+        # Failed targets leave gaps, so published rows are an ordered subsequence of the plan.
+        positions = {frame_id: number for number, frame_id in enumerate(plan["frame_ids"])}
+        order = [positions.get(row["target_frame_id"]) for row in previous]
+        require(None not in order and order == sorted(set(order)), "Published target order changed")
         if prepare_only:
             require(not (output / "calls").exists(), "Prepare-only cannot reset a started annotation")
-            return _publish(output, plan, [], "prepared")
+            return _publish(output, plan, [], [], "prepared")
         (output / ".pause-requested").unlink(missing_ok=True)
-        rows = []
+        rows, failures = [], []
         if not previous:
-            _publish(output, plan, [], "running")
+            _publish(output, plan, [], [], "running")
         def get_client():
             nonlocal client
             if client is None:
@@ -373,34 +472,45 @@ def run_annotation(selection_run, output_dir, config=None, *, resume=False, prep
                 result = _call(output, index, packet, config, get_client,
                     lambda: target["frame_id"] not in previous_by_id and not should_stop()
                     and not (output / ".pause-requested").exists())
-                if result is None:
+                if result is None or result.get("status") == "failed":
                     require(target["frame_id"] not in previous_by_id, "Published annotation lacks an accepted response")
-                    return _publish(output, plan, rows, "paused")
-                if target["frame_id"] in previous_by_id:
-                    require(result == previous_by_id[target["frame_id"]], "Published annotation differs from accepted response")
-                rows.append(result)
+                if result is None:
+                    return _publish(output, plan, rows, failures, "paused")
+                if result.get("status") == "failed":
+                    progress(f"MedGemma annotation failed for {target['frame_id']}: {result['error']}")
+                    failures.append(result)
+                else:
+                    if target["frame_id"] in previous_by_id:
+                        require(result == previous_by_id[target["frame_id"]],
+                                "Published annotation differs from accepted response")
+                    rows.append(result)
                 if len(rows) >= len(previous):
-                    _publish(output, plan, rows, "running")
-            status = "completed_with_unresolved_questions" if any(r["annotation"]["unresolved_questions"] for r in rows) else "completed"
+                    _publish(output, plan, rows, failures, "running")
+            status = ("completed_with_failures" if failures else "completed_with_unresolved_questions"
+                      if any(r["annotation"]["unresolved_questions"] for r in rows) else "completed")
             (output / "last-error.json").unlink(missing_ok=True)
-            return _publish(output, plan, rows, status)
+            return _publish(output, plan, rows, failures, status)
         except BaseException as exc:
             detail = {"type": type(exc).__name__, "message": str(exc), "at": _now()}
             atomic_json(output / "last-error.json", detail, overwrite=True)
             if len(rows) >= len(previous):
-                _publish(output, plan, rows, "interrupted" if isinstance(exc, KeyboardInterrupt) else "failed", detail)
+                _publish(output, plan, rows, failures,
+                         "interrupted" if isinstance(exc, KeyboardInterrupt) else "failed", detail)
             raise
 
 
 def annotation_status(output_dir):
     output = Path(output_dir).expanduser().resolve()
-    require(_read(output / "run.json").get("schema_version") == PROTOCOL_VERSION, "Expected independent MedGemma annotation")
+    require(_read(output / "run.json").get("schema_version") in {PROTOCOL_V1, PROTOCOL_VERSION},
+            "Expected independent MedGemma annotation")
     return {**_read(output / "summary.json"), "writer_active": directory_is_locked(output)}
 
 
 def request_annotation_pause(output_dir):
     output = Path(output_dir).expanduser().resolve()
     annotation_status(output)
+    require(_read(output / "run.json")["schema_version"] == PROTOCOL_VERSION,
+            f"A {PROTOCOL_V1} run cannot resume; annotate with {PROTOCOL_VERSION} in a new output directory")
     atomic_bytes(output / ".pause-requested", b"pause\n", overwrite=True)
     return {"pause_requested": True, "message": "The current frame will finish and save before pausing."}
 
@@ -416,8 +526,8 @@ def add_annotation_parser(subparsers):
     parser.add_argument("--project-root", type=Path)
     parser.add_argument("--timeout", type=float, default=1800)
     for name, default in asdict(AnnotationConfig()).items():
-        if name == "detail_crops":
-            parser.add_argument("--no-detail-crops", dest=name, action="store_false", default=None)
+        if type(default) is bool:
+            parser.add_argument("--no-" + name.replace("_", "-"), dest=name, action="store_false", default=None)
         else:
             parser.add_argument("--" + name.replace("_", "-"), type=type(default), default=None)
     for name in ("medgemma-annotation-status", "pause-medgemma-annotation"):

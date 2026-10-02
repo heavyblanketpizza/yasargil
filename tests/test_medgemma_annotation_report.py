@@ -64,6 +64,31 @@ class MedGemmaAnnotationReportTests(unittest.TestCase):
         self.assertIn("Not eligible for training", page)
         self.assertFalse(list(self.root.glob(".medgemma-annotation-report-*")))
 
+    def test_failed_target_shows_each_rejected_attempt_and_its_raw_reply(self):
+        self.write("evidence/frame-0000.json", self.packet())
+        attempts = [{"call_directory": f"calls/frame-0000/attempt-000{n}", "decoding_stage": stage,
+                     "error": f"Degenerate <{stage}>"} for n, stage in ((1, "primary"), (2, "fallback"))]
+        self.write("summary.json", {"status": "completed_with_failures", "selected_frame_count": 1,
+                                    "annotated_frame_count": 0, "failed_frame_count": 1,
+                                    "failed_targets": [{"target_frame_id": "frame-1", "status": "failed",
+                                                        "attempts": attempts, "error": "Degenerate <fallback>"}]})
+        page = write_annotation_report(self.root).read_text()
+        self.assertIn("1 failed", page)
+        self.assertIn("Annotation failed after 2 attempts", page)
+        self.assertNotIn("Independent MedGemma annotation pending", page)
+        for attempt in attempts:
+            self.assertIn((self.root / attempt["call_directory"] / "response.json").as_uri(), page)
+        self.assertIn("Degenerate &lt;primary&gt;", page)
+        self.assertNotIn("<primary>", page)
+
+    def test_accepted_annotation_shows_decoding_stage_and_quality_flags(self):
+        self.write("evidence/frame-0000.json", self.packet())
+        row = {**self.record(), "decoding_stage": "fallback", "quality_flags": ["claim_cap_reached"]}
+        self.write("annotations.json", {"annotations": [row]})
+        page = write_annotation_report(self.root).read_text()
+        self.assertIn("Decoding: fallback", page)
+        self.assertIn("claim cap reached", page)
+
     def test_prepared_failed_and_missing_artifacts_remain_inspectable(self):
         self.assertIn("summary unavailable", write_annotation_report(self.root).read_text())
         self.write("evidence/frame-0000.json", self.packet())

@@ -45,8 +45,9 @@ class MedGemmaCommandTests(unittest.TestCase):
                   "--output-dir", "/fixture/annotation", "--prepare-only"])
         args, options = run.call_args
         self.assertEqual(args[:2], (Path("/fixture/selection"), Path("/fixture/annotation")))
-        self.assertEqual((args[2].num_ctx, args[2].num_predict), (32768, 4096))
+        self.assertEqual((args[2].num_ctx, args[2].num_predict), (32768, 8192))
         self.assertEqual((args[2].before_frames, args[2].after_frames, args[2].detail_crops), (2, 2, True))
+        self.assertTrue(args[2].fallback_sampling)
         self.assertTrue(options["prepare_only"])
         self.assertFalse(options["resume"])
         client.return_value.chat_raw.assert_not_called()
@@ -74,6 +75,13 @@ class MedGemmaCommandTests(unittest.TestCase):
                   "--before-frames", "0", "--after-frames", "0", "--no-detail-crops"])
         config = run.call_args.args[2]
         self.assertEqual((config.before_frames, config.after_frames, config.detail_crops), (0, 0, False))
+
+    def test_fallback_sampling_can_be_disabled_from_the_cli(self):
+        with patch("yasargil.medgemma_annotation.run_annotation", return_value={"status": "prepared"}) as run, \
+                patch("yasargil.medgemma_annotation.LlamaCppClient"), redirect_stdout(io.StringIO()):
+            main(["annotate-selected-frames", "--selection-run", "/fixture/selection",
+                  "--output-dir", "/fixture/annotation", "--prepare-only", "--no-fallback-sampling"])
+        self.assertFalse(run.call_args.args[2].fallback_sampling)
 
 
 if __name__ == "__main__":

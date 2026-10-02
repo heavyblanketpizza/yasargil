@@ -80,7 +80,7 @@ class InspectorTests(unittest.TestCase):
         record_id = store.records()["records"][0]["id"]
         return store, record_id
 
-    def independent_run(self):
+    def independent_run(self, protocol="medgemma-frame-annotation-v1"):
         from yasargil.medgemma_annotation_contract import build_annotation
         from yasargil.medgemma_annotation_evidence import canonical_frame
         root = self.outputs / "medgemma" / "S1A1"
@@ -102,24 +102,37 @@ class InspectorTests(unittest.TestCase):
                 "support": "target_visible", "evidence_view_ids": ["f0:detail:1"], "uncertainty": "Subtype uncertain"},
                 {"claim_id": "action1", "category": "action", "statement": "Instrument approaches tissue.",
                 "support": "context_supported", "evidence_view_ids": ["f0:full", "f1:full"], "uncertainty": ""}],
-            "unresolved_questions": [{"question": "Which tissue is visible?", "reason": "Boundary obscured", "kind": "target_detail"}]}, packet)
+            "unresolved_questions": [{"question": "Which tissue is visible?", "reason": "Boundary obscured", "kind": "target_detail"}]}, packet, protocol)
         row = {"target_frame_id": "f0", "target": target, "annotation": annotation, "evidence": packet,
             "call_directory": "calls/frame-0000/attempt-0000"}
         write(root / "source.json", self.source)
         write(root / "selected-frames.json", [self.frames[0], self.frames[2]])
         write(root / "selection/selection.json", self.selection_data)
         write(root / "evidence/frame-0000.json", packet)
-        write(root / "run.json", {"schema_version": "medgemma-frame-annotation-v1", "created_at": "2026-02-01",
+        write(root / "run.json", {"schema_version": protocol, "created_at": "2026-02-01",
             "selection_run": str(self.selection), "source_file": "source.json", "selected_file": "selected-frames.json",
             "frame_ids": ["f0", "f2"], "evidence_files": ["evidence/frame-0000.json"],
             "input_sha256": {name: digest(root / name) for name in
                              ("source.json", "selected-frames.json", "selection/selection.json", "evidence/frame-0000.json")}})
-        write(root / "annotations.json", {"schema_version": "medgemma-frame-annotation-v1", "annotations": [row],
+        write(root / "annotations.json", {"schema_version": protocol, "annotations": [row],
             "human_review_required": True, "training_eligible": False})
         write(root / "summary.json", {"status": "partial", "selected_frame_count": 2, "annotated_frame_count": 1})
         write(root / row["call_directory"] / "annotation.json", annotation)
         write(root / row["call_directory"] / "response.json", {"full": "raw model response"})
         return root, packet, row
+
+    def test_v2_annotation_runs_display_like_v1_runs(self):
+        shutil.rmtree(self.medgemma)
+        self.medgemma, self.packet, self.row = self.independent_run("medgemma-frame-annotation-v2")
+        store, record_id = self.store()
+        self.assertEqual(store.record(record_id)["medgemma_annotation_count"], 1)
+        self.assertEqual(store.frame(record_id, "f0")["medgemma"]["schema_version"], "medgemma-frame-annotation-v2")
+
+    def test_annotation_stamped_with_another_protocol_than_its_run_is_skipped(self):
+        document = json.loads((self.medgemma / "annotations.json").read_text())
+        write(self.medgemma / "annotations.json", {**document, "schema_version": "medgemma-frame-annotation-v2"})
+        store, record_id = self.store()
+        self.assertEqual(store.record(record_id)["medgemma_annotation_count"], 0)
 
     def test_independent_annotations_display_with_evidence_views_and_complete_response(self):
         store, record_id = self.store()
@@ -262,7 +275,7 @@ class InspectorTests(unittest.TestCase):
         raw["claims"] = [{key: value for key, value in claim.items() if key != "evidence_frame_ids"}
                          for claim in annotation["claims"]]
         raw["claims"][0]["statement"] = "Updated MedGemma claim."
-        document["annotations"][0]["annotation"] = build_annotation(raw, self.packet)
+        document["annotations"][0]["annotation"] = build_annotation(raw, self.packet, document["schema_version"])
         write(self.medgemma / "annotations.json", document)
         store.records()
         updated = store.record(record_id)["review_identity"]
