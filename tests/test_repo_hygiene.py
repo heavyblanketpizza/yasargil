@@ -16,13 +16,28 @@ hygiene = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(hygiene)
 
 BANNER = "docs/assets/yasargil-banner.webp"
+DEMO_VIDEO = "docs/assets/live-guidance-demo.mp4"
+DEMO_POSTER = "docs/assets/live-guidance-demo.webp"
+ALLOWED_MEDIA = (BANNER, DEMO_VIDEO, DEMO_POSTER)
 EXCLUDED_MEDIA = (
     "docs/assets/source.webp",
+    "docs/assets/source.mp4",
     "docs/assets/yasargil-banner.png",
     "docs/other/yasargil-banner.webp",
     "nested/docs/assets/yasargil-banner.webp",
     "data/yasargil-banner.webp",
     "outputs/yasargil-banner.webp",
+    "docs/assets/live-guidance-demo.png",
+    "docs/assets/Live-guidance-demo.mp4",
+    "docs/assets/live-guidance-demo.MP4",
+    "docs/assets/Live-guidance-demo.webp",
+    "docs/assets/live-guidance-demo.WEBP",
+    "docs/other/live-guidance-demo.mp4",
+    "docs/other/live-guidance-demo.webp",
+    "nested/docs/assets/live-guidance-demo.mp4",
+    "nested/docs/assets/live-guidance-demo.webp",
+    "data/live-guidance-demo.mp4",
+    "outputs/live-guidance-demo.mp4",
     "source.jpeg",
     "surgery.mp4",
 )
@@ -71,8 +86,10 @@ PUBLIC_SOURCE_FILES = (
 
 
 class RepositoryHygieneTests(unittest.TestCase):
-    def test_only_exact_banner_path_is_allowed_media(self):
-        self.assertEqual(list(hygiene.findings(BANNER, b"RIFF\0WEBP")), [])
+    def test_only_exact_public_media_paths_are_allowed(self):
+        for name in ALLOWED_MEDIA:
+            with self.subTest(name=name):
+                self.assertEqual(list(hygiene.findings(name, b"synthetic\0media")), [])
         for name in EXCLUDED_MEDIA:
             with self.subTest(name=name):
                 self.assertIn(
@@ -80,17 +97,27 @@ class RepositoryHygieneTests(unittest.TestCase):
                     list(hygiene.findings(name, b"synthetic\0media")),
                 )
 
-    def test_banner_exception_keeps_content_checks(self):
+    def test_public_media_exceptions_keep_content_checks(self):
         synthetic_path = b"/" + b"Users/" + b"private-user/file"
-        self.assertIn(
-            (1, "machine-specific-path"),
-            list(hygiene.findings(BANNER, synthetic_path)),
-        )
+        synthetic_secret = b"gh" + b"p_" + b"A" * 30
+        for name in ALLOWED_MEDIA:
+            with self.subTest(name=name):
+                self.assertIn(
+                    (1, "machine-specific-path"),
+                    list(hygiene.findings(name, synthetic_path)),
+                )
+                self.assertIn(
+                    (1, "secret-or-private-key"),
+                    list(hygiene.findings(name, synthetic_secret)),
+                )
 
     def test_gitignore_keeps_other_media_excluded(self):
         result = subprocess.run(
-            ["git", "-C", str(ROOT), "check-ignore", "--no-index", "--stdin"],
-            input="\n".join((BANNER, *EXCLUDED_MEDIA)) + "\n",
+            [
+                "git", "-c", "core.ignorecase=false", "-C", str(ROOT),
+                "check-ignore", "--no-index", "--stdin",
+            ],
+            input="\n".join((*ALLOWED_MEDIA, *EXCLUDED_MEDIA)) + "\n",
             capture_output=True,
             text=True,
             check=True,
@@ -136,7 +163,7 @@ class RepositoryHygieneTests(unittest.TestCase):
 
     def test_gitignore_matches_path_guards_and_preserves_public_files(self):
         excluded = {name for names in LEAK_PATHS.values() for name in names}
-        candidates = sorted(excluded | set(PUBLIC_SOURCE_FILES) | {BANNER})
+        candidates = sorted(excluded | set(PUBLIC_SOURCE_FILES) | set(ALLOWED_MEDIA))
         # The checker enforces exact path case regardless of local Git settings.
         result = subprocess.run(
             [
@@ -198,6 +225,18 @@ class RepositoryHygieneGitTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 1, result.stderr)
                 for name, category in files.items():
                     self.assertIn(f"{name}:1: {category}", result.stdout)
+
+    def test_demo_media_can_be_staged_without_force(self):
+        for name in (DEMO_VIDEO, DEMO_POSTER):
+            path = self.root / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"synthetic\0media")
+        self.git("add", "--", DEMO_VIDEO, DEMO_POSTER)
+
+        for args in ((), ("--staged",)):
+            with self.subTest(args=args):
+                result = self.check(*args)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_staged_secret_is_found_after_worktree_is_sanitized(self):
         synthetic_secret = "gh" + "p_" + "A" * 30

@@ -1,7 +1,8 @@
 # Data sources and local setup
 
 **Download the dataset yourself from its original publisher. Yasargil does not
-bundle or redistribute the SOSpine dataset.** This repository is for application
+bundle the SOSpine dataset.** The README includes a curated 65-second annotated
+demo and its preview, credited below. This repository otherwise contains application
 code, schemas, synthetic test fixtures, and user documentation. Source images,
 annotation and outcome tables, copied source rows, generated annotations,
 training exports, and model weights belong in local storage outside Git.
@@ -28,6 +29,15 @@ Preserve the original notices with your download. The inspected author readme
 says CC BY-NC 4.0, while the Figshare project, individual records, and the
 descriptor's **Data Records** section say CC BY 4.0. Yasargil retains that
 discrepancy in provenance; it does not resolve it or grant additional rights.
+
+The README's `docs/assets/live-guidance-demo.mp4` and
+`docs/assets/live-guidance-demo.webp` use source imagery and labels by Alan Balu
+et al. from case S2A2. The original notices identify the USC Department of
+Neurosurgery as the owner of the recordings. Yasargil adds pregenerated overlays
+and heuristic alerts to a continuous excerpt of the released 1-fps frames.
+The demo and preview retain the source license notices above and are excluded
+from Yasargil's Apache license. These two exact documentation assets are the
+only exception for SOSpine media in this repository.
 
 ### Noncommercial experiments
 
@@ -182,7 +192,8 @@ New inference uses local llama.cpp. Dataset files and original CSV values are
 unchanged by the backend migration; see [runtime setup and compatibility](LLAMA_CPP.md#migration-from-ollama).
 
 These derived outputs may contain original images, copied CSV rows, reviewer
-identifiers, and machine paths. Keep them local too. `outputs/` is ignored for
+identifiers, and machine paths. Keep them local too, apart from the curated
+README demo assets described above. `outputs/` is ignored for
 convenience, and raw data/media/export formats are ignored throughout the repo.
 Keep internal planning notes, coding-agent instructions, private research reports,
 work logs, and source-derived inventories outside version control. Public examples

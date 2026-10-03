@@ -167,8 +167,10 @@ __[pP][yY][cC][aA][cC][hH][eE]__/
 *.[xX][zZ]
 *.[zZ][iI][pP]
 
-# Reviewed documentation artwork; no other source or dataset media is admitted.
+# Reviewed documentation artwork and demo; other source media stays excluded.
 !/docs/assets/yasargil-banner.webp
 !/docs/assets/qwen-video-guide-patches.png
 !/docs/assets/qwen-video-guide-reasoning.png
 !/docs/assets/qwen-video-guide-pairing.png
+!/docs/assets/live-guidance-demo.mp4
+!/docs/assets/live-guidance-demo.webp

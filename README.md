@@ -81,6 +81,10 @@ for review notes and exports.
 
 ## Replay live guidance
 
+[![Watch the live guidance demo with pregenerated annotations](docs/assets/live-guidance-demo.webp)](docs/assets/live-guidance-demo.mp4)
+
+[Watch the demo (65 seconds)](docs/assets/live-guidance-demo.mp4)
+
 Play a recorded case as if it were live. The agent answers questions about it.
 
 1. Check your setup (no model, takes seconds):
@@ -157,6 +161,14 @@ conflicting license notices are documented in [Data sources](docs/DATA_SOURCES.m
 
 The banner uses illustrative stock images, not SOSpine frames. Its assets follow
 [Magnific's terms](https://www.magnific.com/ai/docs/licenses-attribution) and are
+excluded from the Apache license.
+
+The demo video and preview use SOSpine imagery and source labels by
+[Alan Balu et al.](https://doi.org/10.1038/s41597-023-02744-5), from the
+[frame release](https://doi.org/10.6084/m9.figshare.20201636.v1). Recordings are
+owned by the USC Department of Neurosurgery. Yasargil adds pregenerated overlays
+and heuristic alerts. These assets retain the
+[source license notices](docs/DATA_SOURCES.md#source-and-attribution) and are
 excluded from the Apache license.
 
 <details>

@@ -40,6 +40,8 @@ PUBLIC_MEDIA = {
     "docs/assets/qwen-video-guide-patches.png",
     "docs/assets/qwen-video-guide-reasoning.png",
     "docs/assets/qwen-video-guide-pairing.png",
+    "docs/assets/live-guidance-demo.mp4",
+    "docs/assets/live-guidance-demo.webp",
 }
 # Keep path exceptions and excluded formats aligned with .gitignore.
 PUBLIC_ARTIFACTS = {
